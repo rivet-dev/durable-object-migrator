@@ -1,0 +1,8 @@
+{
+	"name": "example-rivet",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"rivetkit": "^2.3.31"
+	}
+}
