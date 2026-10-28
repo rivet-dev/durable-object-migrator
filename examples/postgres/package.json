@@ -1,0 +1,11 @@
+{
+	"name": "example-postgres",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"pg": "^8.16.0"
+	},
+	"devDependencies": {
+		"@types/pg": "^8.15.0"
+	}
+}
