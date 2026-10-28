@@ -1,0 +1,13 @@
+packages:
+  - examples/*
+
+allowBuilds:
+  "@biomejs/biome": true
+  cbor-extract: true
+  esbuild: true
+  workerd: true
+
+# rivetkit is our own package, so new releases skip the release-age wait.
+minimumReleaseAgeExclude:
+  - rivetkit
+  - '@rivetkit/*'

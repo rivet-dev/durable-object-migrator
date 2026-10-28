@@ -1,0 +1,29 @@
+{
+	"name": "durable-object-migrator",
+	"description": "Move Cloudflare Durable Objects to your own server with no downtime. Copy src/worker.ts and src/client.ts into your projects.",
+	"private": true,
+	"type": "module",
+	"license": "Apache-2.0",
+	"packageManager": "pnpm@11.18.0",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"test": "vitest run",
+		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p examples",
+		"lint": "biome lint .",
+		"format:check": "biome format .",
+		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test"
+	},
+	"dependencies": {
+		"devalue": "^5.9.4"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.3.11",
+		"@cloudflare/workers-types": "^5.20261027.1",
+		"@types/node": "^26.6.5",
+		"typescript": "^5.9.3",
+		"vitest": "^5.0.5",
+		"wrangler": "^4.153.0"
+	}
+}
