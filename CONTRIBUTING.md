@@ -4,8 +4,8 @@
 
 | Path | Holds |
 |---|---|
-| `src/` | The two files users copy. Each stays self-contained. |
-| `tests/` | End-to-end tests. `tests/fixture/` is a real Worker that Wrangler's test harness runs in local workerd. |
+| `src/` | The files users copy. `worker.ts` and `client.ts` stay self-contained. `alchemy.ts` builds on `worker.ts`. |
+| `tests/` | End-to-end tests. `tests/fixture/` is a real Worker that Wrangler's test harness runs in local workerd. `tests/alchemy-fixture/` is an Alchemy stack that `alchemy dev` runs in local workerd. |
 | `tests/smoke/` | The same checks against the fixture deployed to a real Cloudflare account |
 | `examples/` | Examples that must type-check |
 | `docs/`, `skills/` | The guide and the agent skill |
