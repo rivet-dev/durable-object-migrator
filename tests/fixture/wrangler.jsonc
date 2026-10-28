@@ -1,0 +1,12 @@
+// The test Worker. Local tests run it with Wrangler's createTestHarness,
+// and the prod smoke run deploys it with `wrangler deploy -c tests/fixture/wrangler.jsonc`.
+{
+	"name": "durable-object-migrator-smoke",
+	"main": "./worker.ts",
+	"compatibility_date": "2026-07-01",
+	"workers_dev": true,
+	"durable_objects": {
+		"bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+	},
+	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+}

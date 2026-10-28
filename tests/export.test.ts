@@ -1,0 +1,184 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { MigrationDirtyError, MigratorError, createClient } from "../src/client";
+import { TOKEN, destinationSnapshot, openDestination, seed, sourceSnapshot, startWorker, type Worker } from "./helpers";
+
+let worker: Worker;
+
+beforeAll(async () => {
+	worker = await startWorker();
+});
+
+afterAll(async () => {
+	await worker?.dispose();
+});
+
+async function exportInto(name: string) {
+	const migrator = worker.migrator();
+	const { id } = await migrator.resolve("ROOMS", { name });
+	const db = openDestination();
+	let pages = 0;
+	for await (const page of migrator.exportObject({ binding: "ROOMS", id })) {
+		db.exec(page.sql);
+		pages++;
+	}
+	return { db, pages, id };
+}
+
+describe("export", () => {
+	test("a Durable Object full of hard cases arrives with identical data", async () => {
+		await seed(worker, "fidelity", { big: true });
+		const source = await sourceSnapshot(worker, "fidelity");
+
+		const { db, pages } = await exportInto("fidelity");
+
+		expect(pages).toBeGreaterThan(1);
+		expect(destinationSnapshot(db)).toEqual(source);
+	});
+
+	test("the dump is a valid script for a plain sqlite database", async () => {
+		await seed(worker, "script");
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("ROOMS", { name: "script" });
+		let script = "";
+		for await (const page of migrator.exportObject({ binding: "ROOMS", id })) script += `${page.sql}\n`;
+
+		const db = openDestination();
+		db.exec(script);
+		expect(db.prepare(`SELECT body FROM notes WHERE n = 9007199254740993`).get()).toEqual({ body: "it's ünïcödé 🎉" });
+	});
+
+	test("a SQL write during the export makes it fail, and the retry includes the write", async () => {
+		await seed(worker, "dirty-sql", { big: true });
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("ROOMS", { name: "dirty-sql" });
+
+		const attempt = async () => {
+			let first = true;
+			for await (const _ of migrator.exportObject({ binding: "ROOMS", id })) {
+				if (!first) continue;
+				first = false;
+				expect((await worker.app("dirty-sql", "write?body=written%20mid-export")).status).toBe(200);
+			}
+		};
+		await expect(attempt()).rejects.toBeInstanceOf(MigrationDirtyError);
+
+		const { db } = await exportInto("dirty-sql");
+		expect(db.prepare(`SELECT count(*) AS n FROM notes WHERE body = 'written mid-export'`).get()).toEqual({ n: 1 });
+	});
+
+	test("a KV write during the export makes it fail", async () => {
+		await seed(worker, "dirty-kv", { big: true });
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("ROOMS", { name: "dirty-kv" });
+
+		const attempt = async () => {
+			let first = true;
+			for await (const _ of migrator.exportObject({ binding: "ROOMS", id })) {
+				if (!first) continue;
+				first = false;
+				expect((await worker.app("dirty-kv", "kv-put")).status).toBe(200);
+			}
+		};
+		await expect(attempt()).rejects.toBeInstanceOf(MigrationDirtyError);
+	});
+
+	test("a Durable Object that restarts during the export makes it fail, and the retry succeeds", async () => {
+		await seed(worker, "evicted", { big: true });
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("ROOMS", { name: "evicted" });
+
+		// Pages are fetched by hand so no request to the object is in flight
+		// during eviction. exportObject always prefetches the next page, and
+		// workerd's test eviction waits for every request to drain.
+		const page = (cursor?: string) => {
+			const url = new URL("/__migrate/ROOMS/export", worker.url);
+			url.searchParams.set("id", id);
+			if (cursor) url.searchParams.set("cursor", cursor);
+			return fetch(url, { headers: { authorization: `Bearer ${TOKEN}` } });
+		};
+		const first = (await (await page()).json()) as { cursor: string };
+
+		// A restart resets the write counter, so the export cannot prove nothing was written.
+		await worker.evict("evicted");
+
+		const second = await page(first.cursor);
+		expect(second.status).toBe(409);
+		expect(await second.json()).toMatchObject({ error: { code: "migrator.dirty" } });
+
+		const { db } = await exportInto("evicted");
+		expect(db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
+	});
+});
+
+describe("background work", () => {
+	test("a write still pending in ctx.waitUntil makes the export fail, and the retry includes it", async () => {
+		await seed(worker, "late");
+		expect((await worker.app("late", "late-write")).status).toBe(200);
+
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("ROOMS", { name: "late" });
+		const attempt = async () => {
+			for await (const _ of migrator.exportObject({ binding: "ROOMS", id })) {
+			}
+		};
+		await expect(attempt()).rejects.toBeInstanceOf(MigrationDirtyError);
+
+		expect((await worker.app("late", "release")).status).toBe(200);
+		const { db } = await exportInto("late");
+		expect(db.prepare(`SELECT count(*) AS n FROM notes WHERE body = 'late write'`).get()).toEqual({ n: 1 });
+	});
+});
+
+describe("after migration", () => {
+	test("app fetch and RPC are rejected, and the migrator can still export", async () => {
+		await seed(worker, "moved");
+		await exportInto("moved");
+
+		const fetched = await worker.app("moved", "ping");
+		expect(fetched.status).toBe(503);
+		expect(await fetched.json()).toMatchObject({ error: { code: "migrator.moved" } });
+
+		const rpc = await worker.app("moved", "rpc-note");
+		expect(await rpc.text()).toContain("migrator.moved");
+
+		const again = await exportInto("moved");
+		expect(again.db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
+	});
+});
+
+describe("auth", () => {
+	test("a wrong token gets no data", async () => {
+		await seed(worker, "secret");
+		const bad = createClient({ workerUrl: worker.url, token: "wrong" });
+
+		await expect(bad.resolve("ROOMS", { name: "secret" })).rejects.toMatchObject({ code: "migrator.unauthorized" });
+	});
+
+	test("an app that forwards requests to the Durable Object does not expose the export", async () => {
+		await seed(worker, "forwarded");
+		const { id } = await worker.migrator().resolve("ROOMS", { name: "forwarded" });
+
+		const res = await worker.app("forwarded", `forward/__migrate/ROOMS/export?id=${id}`);
+
+		expect(res.status).toBe(401);
+		expect(await res.text()).not.toContain("CREATE TABLE");
+	});
+
+	test("a workerUrl that points at the new server instead of Cloudflare fails with a clear error", async () => {
+		// Stands in for the new server that the main domain points at after DNS cutover.
+		const server = createServer((_, res) => res.end("hello from the new server"));
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		const wrong = createClient({ workerUrl: `http://127.0.0.1:${port}`, token: TOKEN });
+
+		try {
+			const err = await wrong.resolve("ROOMS", { name: "x" }).catch((e: unknown) => e);
+			expect(err).toBeInstanceOf(MigratorError);
+			expect(err).toMatchObject({ code: "migrator.not_a_migrator" });
+		} finally {
+			server.close();
+		}
+	});
+});
