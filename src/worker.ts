@@ -146,6 +146,7 @@ class MigratorState {
 	readonly sql: SqlStorage | null;
 	#migrated = false;
 	#savedName: string | null = null;
+	#savedAlarm: number | null = null;
 	#inFlight = 0;
 
 	constructor(
@@ -161,7 +162,21 @@ class MigratorState {
 		for (const row of this.sql.exec(`SELECT key, value FROM "${STATE_TABLE}"`)) {
 			if (row.key === "state") this.#migrated = row.value === "migrated";
 			if (row.key === "name") this.#savedName = row.value as string;
+			if (row.key === "alarm") this.#savedAlarm = row.value as number;
 		}
+		if (this.#migrated && this.env[DISABLED_ENV] === "true" && this.#savedAlarm !== null) {
+			this.#restoreAlarm(this.#savedAlarm);
+		}
+	}
+
+	// Rollback: the export removed the alarm, so put it back. A time already in
+	// the past makes it run right away.
+	#restoreAlarm(at: number): void {
+		this.ctx.blockConcurrencyWhile(async () => {
+			if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at);
+			this.sql!.exec(`DELETE FROM "${STATE_TABLE}" WHERE key = 'alarm'`);
+			this.#savedAlarm = null;
+		});
 	}
 
 	// Work handed to ctx.waitUntil can write after its request has returned. It
@@ -217,9 +232,13 @@ class MigratorState {
 		return this.#savedName ?? this.ctx.id.name ?? null;
 	}
 
-	markMigrated(): void {
+	/** `alarm` is the pending alarm the export saw. It is kept so a rollback can set it again. */
+	markMigrated(alarm: number | null): void {
 		this.#ensureStateTable();
 		this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('state', 'migrated')`);
+		if (alarm !== null) {
+			this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('alarm', ?)`, alarm);
+		}
 		this.#migrated = true;
 	}
 
@@ -372,8 +391,11 @@ async function exportPage(
 		if (m.inFlight > 0) {
 			throw new MigratorError(409, "migrator.dirty", "app requests were still running when the export finished");
 		}
-		m.markMigrated();
+		m.markMigrated(alarm);
 	});
+	// The new server has the alarm time from __do_meta. Removing it here means
+	// scheduled work can never run on the old copy.
+	if (alarm !== null) await m.ctx.storage.deleteAlarm();
 	closeWebSockets(m.ctx);
 	return { statements: out, cursor: null };
 }

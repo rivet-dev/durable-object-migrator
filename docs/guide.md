@@ -102,7 +102,10 @@ Stop-the-world means putting the whole app in maintenance mode, copying all the 
 
 Rolling back is serving your Durable Object code through Workers again. Point DNS back at Cloudflare and set `MIGRATOR_DISABLED=true` so every Durable Object serves normally again. Anything written on the new server after cutover stays there. It does not sync back to Cloudflare.
 
-The migrator never deletes data on Cloudflare. Its only write is its own `__migrator` table.
+The migrator never deletes data on Cloudflare. Its writes are its own `__migrator` table and the alarm:
+
+- When a Durable Object is copied, its pending alarm is removed, so scheduled work cannot run on the old copy. The new server gets the alarm time in `__do_meta`.
+- With `MIGRATOR_DISABLED=true`, the alarm is set again the next time the object starts. If its time has passed, it runs right away. An object that gets no request after rollback keeps its alarm off until it does.
 
 ## Limits
 

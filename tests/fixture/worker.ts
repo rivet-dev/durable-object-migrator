@@ -38,6 +38,9 @@ class RoomImpl extends DurableObject<Env> {
 					}),
 				);
 				return new Response("ok");
+			case "/schedule":
+				await this.ctx.storage.setAlarm(Date.now() + Number(url.searchParams.get("in") ?? 0));
+				return new Response("ok");
 			case "/release":
 				this.release?.();
 				return new Response("ok");
