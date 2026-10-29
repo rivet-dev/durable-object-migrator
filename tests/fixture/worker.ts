@@ -3,10 +3,10 @@ import { stringify } from "devalue";
 import { migratable, migrationRoute } from "../../src/worker";
 import { snapshot } from "./snapshot";
 
-type Env = {
+interface Env {
 	ROOMS: DurableObjectNamespace<RoomImpl>;
 	WORKER_MIGRATOR_TOKEN: string;
-};
+}
 
 const ALARM_AT = Date.UTC(2099, 0, 1);
 
@@ -121,6 +121,8 @@ class RoomImpl extends DurableObject<Env> {
 }
 
 export const Room = migratable(RoomImpl);
+
+export const KvRoom = migratable(class extends DurableObject<Env> {});
 
 export default {
 	async fetch(req: Request, env: Env): Promise<Response> {

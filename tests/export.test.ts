@@ -98,6 +98,16 @@ describe("export", () => {
 		const { db } = await exportInto("evicted");
 		expect(db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
 	});
+
+	test("a KV-backed Durable Object is reported as unsupported", async () => {
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("KV_ROOMS", { name: "kv" });
+		const attempt = async () => {
+			for await (const _ of migrator.exportObject({ binding: "KV_ROOMS", id })) {
+			}
+		};
+		await expect(attempt()).rejects.toMatchObject({ code: "migrator.unsupported" });
+	});
 });
 
 describe("background work", () => {

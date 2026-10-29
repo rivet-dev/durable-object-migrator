@@ -37,7 +37,8 @@ const HANDLER_NAMES = new Set([
 	"webSocketError",
 ]);
 
-type Env = Record<string, unknown>;
+// Not `unknown`: the `interface Env` from `wrangler types` would not fit.
+type Env = Record<string, any>;
 type DurableObjectClass = new (...args: any[]) => object;
 
 const STATE = Symbol("durable-object-migrator");
@@ -141,7 +142,10 @@ async function routeToObject(req: Request, url: URL, env: Env, token: string | u
 	} catch {
 		return errorResponse(400, "migrator.bad_request", `"${idParam}" is not a Durable Object id for this binding`);
 	}
-	return ns.get(id).fetch(req);
+	return ns
+		.get(id)
+		.fetch(req)
+		.catch((err) => errorResponse(502, "migrator.internal", `could not reach the Durable Object: ${err}`));
 }
 
 /** What `migratable` needs from the Worker's env. Adapters pass their own values. */
@@ -675,7 +679,11 @@ function sqlString(value: string): string {
 
 function sqlOrNull(ctx: MigratorContext): SqlStorage | null {
 	try {
-		return ctx.storage.sql;
+		const { sql } = ctx.storage;
+		// workerd returns `sql` for every Durable Object and checks for SQLite
+		// storage only on first use, so a KV-backed object fails here.
+		void sql.databaseSize;
+		return sql;
 	} catch {
 		return null;
 	}
