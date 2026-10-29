@@ -1,6 +1,6 @@
 # Examples
 
-Each example imports files from `src/` in this repo. In your project, copy those files next to your code instead.
+Each example imports `@rivet-dev/durable-object-migrator`, linked to the source in this repo. In your project, install it from npm.
 
 | Example | Shows |
 |---|---|

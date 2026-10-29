@@ -1,8 +1,9 @@
 {
-	"name": "example-postgres",
+	"name": "@rivet-dev/example-postgres",
 	"private": true,
 	"type": "module",
 	"dependencies": {
+		"@rivet-dev/durable-object-migrator": "workspace:*",
 		"pg": "^8.16.0"
 	},
 	"devDependencies": {

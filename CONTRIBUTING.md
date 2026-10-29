@@ -4,11 +4,11 @@
 
 | Path | Holds |
 |---|---|
-| `src/` | The files users copy. `worker.ts` and `client.ts` stay self-contained. `alchemy.ts` builds on `worker.ts`. |
+| `src/` | The package entry points: `worker.ts`, `client.ts` and `alchemy.ts`. `worker.ts` and `client.ts` stay self-contained. `alchemy.ts` builds on `worker.ts`. |
 | `tests/` | End-to-end tests. `tests/fixture/` is a real Worker that Wrangler's test harness runs in local workerd. `tests/alchemy-fixture/` is an Alchemy stack that `alchemy dev` runs in local workerd. |
 | `tests/smoke/` | The same checks against the fixture deployed to a real Cloudflare account |
-| `examples/` | Examples that must type-check |
-| `docs/`, `skills/` | The guide and the agent skill |
+| `examples/` | Examples that import the package by name and must type-check |
+| `docs/` | The guide and the Alchemy guide |
 
 Repository rules for humans and agents are in [CLAUDE.md](CLAUDE.md).
 
@@ -38,3 +38,14 @@ npx wrangler delete -c tests/fixture/wrangler.jsonc
 ```
 
 The list check waits up to 10 minutes for Cloudflare's list API, which shows new objects after a delay that changes from run to run.
+
+## Release
+
+The package is `@rivet-dev/durable-object-migrator`. In the repo, its exports point at `src/` so the examples and tests run without a build. On publish, `publishConfig.exports` points them at the compiled `dist/`.
+
+```sh
+pnpm run ci
+pnpm version <patch|minor|major>
+pnpm pack            # builds dist/ and writes the tarball; check its contents
+pnpm publish
+```

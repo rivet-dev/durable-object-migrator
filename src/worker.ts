@@ -4,8 +4,11 @@
 //
 //   export const Room = migratable(RoomImpl);
 //   export default {
-//     fetch: (req, env, ctx) =>
-//       migrationRoute(req, env, { token: env.WORKER_MIGRATOR_TOKEN }) ?? app.fetch(req, env, ctx),
+//     fetch(req, env, ctx) {
+//       const migratorResponse = migrationRoute(req, env, { token: env.WORKER_MIGRATOR_TOKEN });
+//       if (migratorResponse) return migratorResponse;
+//       return app.fetch(req, env, ctx);
+//     },
 //   };
 //
 // Only SQLite-backed Durable Objects are supported.

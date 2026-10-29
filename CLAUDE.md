@@ -1,6 +1,6 @@
 # Repository Instructions
 
-- `src/worker.ts`, `src/client.ts` and `src/alchemy.ts` are copied into user projects, not imported as a package. `worker.ts` and `client.ts` import nothing from each other or from other repo files. `alchemy.ts` may import `./worker`, and nothing imports `alchemy.ts`. `worker.ts` may depend only on `devalue`, `client.ts` only on `fetch`, and `alchemy.ts` only on `effect`, `alchemy` and `@alchemy.run/cloudflare`.
+- `src/worker.ts`, `src/client.ts` and `src/alchemy.ts` are the published entry points `@rivet-dev/durable-object-migrator/{worker,client,alchemy}`. Keep each one small enough that a user can still copy it into a project by hand. `worker.ts` and `client.ts` import nothing from each other or from other repo files. `alchemy.ts` may import `./worker`, and nothing imports `alchemy.ts`. `worker.ts` may depend only on `devalue`, `client.ts` only on `fetch`, and `alchemy.ts` only on `effect`, `alchemy` and `@alchemy.run/cloudflare`.
 - `worker.ts` and `client.ts` share only the HTTP contract: `/__migrate/:binding/{export,resolve}`, the `x-migrator` response header, and `migrator.*` error codes. Change both sides together.
 - Never add a code path that deletes or rewrites user data on Cloudflare. The only allowed writes are the `__migrator` state table and removing a migrated object's alarm, which is saved there so rollback can restore it.
 - An export may mark a Durable Object migrated only inside the same `transactionSync` as the dirty check.
@@ -8,5 +8,5 @@
 - The Alchemy tests run `tests/alchemy-fixture` with `alchemy dev` in a temp directory with its own HOME and a minimal env. Never pass Cloudflare credentials to them.
 - Test outcomes a caller can observe. Never paper over a flake with retries or longer waits; find the race.
 - `tests/smoke/run.ts` checks what local workerd cannot: Cloudflare limits, `ctx.id.name`, the REST list API. Run it before changing the export format or the list logic. Keep account ids and URLs out of the repo.
-- Examples in `examples/` must type-check (`pnpm check-types`). Update `docs/guide.md` and the README API table when the API changes.
+- Examples in `examples/` import the package by name (`workspace:*`), never `../../src`. They must type-check (`pnpm check-types`). Update `docs/guide.md` and the README API table when the API changes.
 - Write docs and comments in plain, complete sentences. Lead with what the user does or gets.

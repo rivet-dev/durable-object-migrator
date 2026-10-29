@@ -4,7 +4,7 @@
 
 import { actor, setup } from "rivetkit";
 import { db } from "rivetkit/db";
-import { createClient } from "../../src/client.ts";
+import { createClient } from "@rivet-dev/durable-object-migrator/client";
 
 export const migrator = createClient({
 	workerUrl: required("WORKER_URL"),

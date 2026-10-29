@@ -1,22 +1,79 @@
 {
-	"name": "durable-object-migrator",
-	"description": "Move Cloudflare Durable Objects to your own server with no downtime. Copy src/worker.ts and src/client.ts into your projects.",
-	"private": true,
+	"name": "@rivet-dev/durable-object-migrator",
+	"version": "1.0.0",
+	"description": "Move Cloudflare Durable Objects to your own server with no downtime and no lost writes.",
 	"type": "module",
-	"license": "Apache-2.0",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/rivet-dev/durable-object-migrator.git"
+	},
+	"homepage": "https://github.com/rivet-dev/durable-object-migrator#readme",
+	"keywords": [
+		"cloudflare",
+		"durable-objects",
+		"migration",
+		"sqlite",
+		"rivet"
+	],
 	"packageManager": "pnpm@11.18.0",
 	"engines": {
 		"node": ">=24"
 	},
+	"exports": {
+		"./worker": "./src/worker.ts",
+		"./client": "./src/client.ts",
+		"./alchemy": "./src/alchemy.ts"
+	},
+	"publishConfig": {
+		"access": "public",
+		"exports": {
+			"./worker": {
+				"types": "./dist/worker.d.ts",
+				"default": "./dist/worker.js"
+			},
+			"./client": {
+				"types": "./dist/client.d.ts",
+				"default": "./dist/client.js"
+			},
+			"./alchemy": {
+				"types": "./dist/alchemy.d.ts",
+				"default": "./dist/alchemy.js"
+			}
+		}
+	},
+	"files": [
+		"dist",
+		"src"
+	],
+	"sideEffects": false,
 	"scripts": {
+		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"test": "vitest run",
 		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p tests/smoke && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
 		"lint": "biome lint .",
 		"format:check": "biome format .",
-		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test"
+		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test",
+		"prepack": "pnpm build"
 	},
 	"dependencies": {
 		"devalue": "^5.9.4"
+	},
+	"peerDependencies": {
+		"@alchemy.run/cloudflare": "2.0.0-beta.84",
+		"alchemy": "2.0.0-beta.84",
+		"effect": "^4.0.6"
+	},
+	"peerDependenciesMeta": {
+		"@alchemy.run/cloudflare": {
+			"optional": true
+		},
+		"alchemy": {
+			"optional": true
+		},
+		"effect": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@alchemy.run/cloudflare": "2.0.0-beta.84",

@@ -1,6 +1,6 @@
-// A plain-class Durable Object. It needs only src/worker.ts.
+// A plain-class Durable Object. It needs only the `/worker` entry point.
 import { DurableObject } from "cloudflare:workers";
-import { migratable, migrationRoute } from "../../src/worker.ts";
+import { migratable, migrationRoute } from "@rivet-dev/durable-object-migrator/worker";
 
 type Env = {
 	ROOMS: DurableObjectNamespace<RoomImpl>;

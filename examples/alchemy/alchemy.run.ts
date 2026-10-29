@@ -1,7 +1,7 @@
 // Both kinds of Durable Object on Alchemy v2, each ready to export.
 //
-//   Room: a plain class, wrapped with `migratable` from src/worker.ts.
-//   Chat: an Effect-native object, wrapped with `migratable` from src/alchemy.ts.
+//   Room: a plain class, wrapped with `migratable` from `@rivet-dev/durable-object-migrator/worker`.
+//   Chat: an Effect-native object, wrapped with `migratable` from `@rivet-dev/durable-object-migrator/alchemy`.
 //
 // Set WORKER_MIGRATOR_TOKEN in .env before you deploy. Backfill needs each
 // Worker's script name, which is the `workerName` output, not the stack name.

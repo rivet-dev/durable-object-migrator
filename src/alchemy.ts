@@ -23,7 +23,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { MigratorState, migrationRoute, movedResponse, ROUTE_PREFIX } from "./worker";
+import { MigratorState, migrationRoute, movedResponse, ROUTE_PREFIX } from "./worker.js";
 
 /** The Durable Object was migrated to a new server, so it no longer serves the app. */
 export class MigrationMovedError extends Schema.TaggedError<MigrationMovedError>()("MigrationMovedError", {

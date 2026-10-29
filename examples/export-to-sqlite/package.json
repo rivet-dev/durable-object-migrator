@@ -1,0 +1,8 @@
+{
+	"name": "@rivet-dev/example-export-to-sqlite",
+	"private": true,
+	"type": "module",
+	"dependencies": {
+		"@rivet-dev/durable-object-migrator": "workspace:*"
+	}
+}

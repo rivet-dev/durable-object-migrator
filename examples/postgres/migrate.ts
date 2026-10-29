@@ -9,7 +9,7 @@
 import { mkdir, rename, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import pg from "pg";
-import { createClient } from "../../src/client.ts";
+import { createClient } from "@rivet-dev/durable-object-migrator/client";
 
 const BINDING = "ROOMS";
 const DATA_DIR = "./data";

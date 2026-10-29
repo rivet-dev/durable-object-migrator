@@ -1,7 +1,7 @@
-// An Effect-native Durable Object. It needs src/alchemy.ts and src/worker.ts.
+// An Effect-native Durable Object, wrapped with the Alchemy adapter.
 import * as Cloudflare from "@alchemy.run/cloudflare";
 import * as Effect from "effect/Effect";
-import * as Migrator from "../../src/alchemy.ts";
+import * as Migrator from "@rivet-dev/durable-object-migrator/alchemy";
 
 export default class Chat extends Cloudflare.DurableObject<Chat>()(
 	"Chat",

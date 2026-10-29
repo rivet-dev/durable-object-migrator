@@ -5,7 +5,7 @@ import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as Schema from "effect/Schema";
-import * as Migrator from "../../src/alchemy.ts";
+import * as Migrator from "@rivet-dev/durable-object-migrator/alchemy";
 import Chat from "./Chat.ts";
 
 const ChatParams = Schema.Struct({ room: Schema.String });

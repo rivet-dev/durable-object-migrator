@@ -7,7 +7,7 @@
 
 import { rename, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
-import { createClient, MigrationDirtyError } from "../../src/client.ts";
+import { createClient, MigrationDirtyError } from "@rivet-dev/durable-object-migrator/client";
 
 const [binding, name] = process.argv.slice(2);
 if (!binding || !name) throw new Error("usage: export.ts <BINDING> <name>");
