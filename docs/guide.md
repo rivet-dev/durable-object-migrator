@@ -8,8 +8,8 @@ How a migration works, from wrapping the Worker to turning Cloudflare off. For t
 2. Deploy the new server with `migrate` called before each request (part 1 below).
 3. A day ahead, lower your DNS TTL (for example to 60 seconds) so caches expire fast.
 4. Point your domain at the new server. From now on, Durable Objects move on first use.
-5. Wait a few minutes, then run backfill (part 2 below).
-6. Run backfill again with `startAt: null` to confirm nothing was missed.
+5. Wait a few minutes, then run backfill (part 2 below). Cloudflare's list API shows new Durable Objects only after a delay.
+6. Run backfill again with `startAt: null`. It catches Durable Objects that clients with stale DNS created on Cloudflare after the first run.
 7. Once you trust the new server, delete the Worker and its data yourself. The migrator never deletes anything.
 
 ## Part 0: the migrate function
@@ -57,8 +57,8 @@ await migrator.backfill({
 });
 ```
 
-- Run it after the DNS cutover. Cloudflare's list API shows new objects only after a few minutes.
-- Run it again with `startAt: null` to confirm nothing was missed. Your `migrate` skips finished Durable Objects without waking them.
+- Run it a few minutes after the DNS cutover. Cloudflare's list API shows new Durable Objects only after a delay.
+- Run it again with `startAt: null` to catch objects that clients with stale DNS created later. Your `migrate` skips finished Durable Objects without waking them.
 - The API token needs a Workers read permission.
 - A Durable Object that keeps failing is reported in `failed`. The rest still move.
 
@@ -92,6 +92,8 @@ Stop-the-world means putting the whole app in maintenance mode, copying all the 
 ## Rollback
 
 Rolling back is serving your Durable Object code through Workers again. Point DNS back at Cloudflare and set `MIGRATOR_DISABLED=true` so every Durable Object serves normally again. Anything written on the new server after cutover stays there. It does not sync back to Cloudflare.
+
+A Durable Object that stays busy can keep running with the old Worker settings for up to 5 minutes after you deploy, so it can keep refusing requests for that long. This is a [known Cloudflare issue](https://github.com/cloudflare/workers-sdk/issues/16235).
 
 The migrator never deletes data on Cloudflare. Its writes are its own `__migrator` table and the alarm:
 
@@ -144,7 +146,7 @@ For both kinds:
 |---|---|
 | A row is at most 2 MB on Cloudflare | One row always fits in a page. A 2 MB blob becomes a ~4 MB `INSERT`. |
 | Pages are about 4 MB | Tested in production with 1.5 MB rows |
-| The Cloudflare list API lags behind new objects by about 5 minutes (measured) | Run backfill a while after cutover, and run it again with `startAt: null` to catch late objects |
+| The Cloudflare list API shows a new Durable Object only after a delay | Usually a few minutes. We measured up to 8, but Cloudflare does not document the delay and it changes from run to run. Run backfill a few minutes after cutover, and again with `startAt: null` to catch late objects. |
 | The Cloudflare list API returns ids, not names | The migrator saves each Durable Object's name when it sees one. Objects it never saw by name have no name. |
 | KV values are JS values (`Date`, `Map`, …) | Stored as [devalue](https://github.com/sveltejs/devalue) strings in `__do_kv`. Values devalue cannot encode fail the export with a clear error. |
 | A Durable Object that keeps getting writes | Its export keeps retrying |
