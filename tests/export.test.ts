@@ -132,6 +132,26 @@ describe("bad requests", () => {
 	});
 });
 
+describe("bad responses", () => {
+	test("a migrator answer with the wrong shape fails with a clear error instead of returning it", async () => {
+		// Stands in for a migrator Worker on another version of worker.ts.
+		const server = createServer((_, res) => {
+			res.setHeader("x-migrator", "1");
+			res.setHeader("content-type", "application/json");
+			res.end(JSON.stringify({ id: 42 }));
+		});
+		await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+		const { port } = server.address() as AddressInfo;
+		const other = createClient({ workerUrl: `http://127.0.0.1:${port}`, token: TOKEN });
+
+		try {
+			await expect(other.resolve("ROOMS", { name: "x" })).rejects.toMatchObject({ code: "migrator.bad_response" });
+		} finally {
+			server.close();
+		}
+	});
+});
+
 describe("background work", () => {
 	test("a write still pending in ctx.waitUntil makes the export fail, and the retry includes it", async () => {
 		await seed(worker, "late");

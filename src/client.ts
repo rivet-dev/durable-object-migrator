@@ -74,8 +74,41 @@ export type BackfillResult = {
 	failed: { id: string; error: unknown }[];
 };
 
+type ExportResponse = { statements: string[]; cursor: string | null };
+type ResolveResponse = { id: string; name: string | null };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function readExport(body: unknown): ExportResponse | null {
+	if (!isRecord(body) || !Array.isArray(body.statements)) return null;
+	const { statements, cursor } = body;
+	if (!statements.every((s) => typeof s === "string")) return null;
+	if (cursor !== null && typeof cursor !== "string") return null;
+	return { statements, cursor };
+}
+
+function readResolve(body: unknown): ResolveResponse | null {
+	if (!isRecord(body) || typeof body.id !== "string") return null;
+	if (body.name !== null && typeof body.name !== "string") return null;
+	return { id: body.id, name: body.name };
+}
+
+function readError(body: unknown): { code: string; message: string } | null {
+	if (!isRecord(body) || !isRecord(body.error)) return null;
+	const { code, message } = body.error;
+	return typeof code === "string" && typeof message === "string" ? { code, message } : null;
+}
+
 export function createClient(opts: ClientOptions) {
-	const call = async <T>(binding: string, action: string, params: Record<string, string>, signal?: AbortSignal) => {
+	const call = async <T>(
+		binding: string,
+		action: string,
+		params: Record<string, string>,
+		read: (body: unknown) => T | null,
+		signal?: AbortSignal,
+	): Promise<T> => {
 		const url = new URL(`${ROUTE_PREFIX}${encodeURIComponent(binding)}/${action}`, opts.workerUrl);
 		for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
 		const res = await fetch(url, { headers: { authorization: `Bearer ${opts.token}` }, signal });
@@ -87,13 +120,16 @@ export function createClient(opts: ClientOptions) {
 				res.status,
 			);
 		}
-		const body = (await res.json()) as T | { error: { code: string; message: string } };
+		const body: unknown = await res.json().catch(() => undefined);
 		if (!res.ok) {
-			const { code, message } = (body as { error: { code: string; message: string } }).error;
-			if (code === "migrator.dirty") throw new MigrationDirtyError(message);
-			throw new MigratorError(code, message, res.status);
+			const error = readError(body);
+			if (!error) throw new MigratorError("migrator.bad_response", `HTTP ${res.status} with no error body`, res.status);
+			if (error.code === "migrator.dirty") throw new MigrationDirtyError(error.message);
+			throw new MigratorError(error.code, error.message, res.status);
 		}
-		return body as T;
+		const value = read(body);
+		if (value === null) throw new MigratorError("migrator.bad_response", `unexpected ${action} response`, res.status);
+		return value;
 	};
 
 	return {
@@ -105,11 +141,10 @@ export function createClient(opts: ClientOptions) {
 		 * Throws `MigrationDirtyError` if the object was written to during the export.
 		 */
 		async *exportObject(target: { binding: string; id: string; signal?: AbortSignal }): AsyncGenerator<ExportPage> {
-			type Page = { statements: string[]; cursor: string | null };
 			const fetchPage = (cursor: string) => {
 				const params: Record<string, string> = { id: target.id };
 				if (cursor) params.cursor = cursor;
-				const p = call<Page>(target.binding, "export", params, target.signal);
+				const p = call(target.binding, "export", params, readExport, target.signal);
 				// Handled when awaited. This only stops an unhandled rejection if the caller stops early.
 				p.catch(() => {});
 				return p;
@@ -128,7 +163,7 @@ export function createClient(opts: ClientOptions) {
 
 		/** Turns a name into an id (does not wake the Durable Object), or an id into its saved name (wakes it). */
 		resolve(binding: string, target: { name: string } | { id: string }): Promise<{ id: string; name: string | null }> {
-			return call(binding, "resolve", "name" in target ? { name: target.name } : { id: target.id });
+			return call(binding, "resolve", "name" in target ? { name: target.name } : { id: target.id }, readResolve);
 		},
 
 		/** Lists every Durable Object with stored data and runs `migrate` on each one. */
@@ -164,7 +199,7 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 		return saving;
 	};
 
-	const start: Position = opts.startAt ? (JSON.parse(opts.startAt) as Position) : { listCursor: null, index: 0 };
+	const start: Position = opts.startAt ? parsePosition(opts.startAt) : { listCursor: null, index: 0 };
 	const namespaceId = await findNamespace(opts.cloudflare);
 
 	let listCursor = start.listCursor;
@@ -178,14 +213,14 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 			concurrency,
 			opts.signal,
 			async (i) => {
-				const id = page.ids[skip + i]!;
-				if (id === null) return;
-				const error = await withRetries(retries, opts.signal, () => opts.migrate({ id }));
-				if (error === undefined) {
+				const id = page.ids[skip + i];
+				if (id == null) return;
+				const outcome = await withRetries(retries, opts.signal, () => opts.migrate({ id }));
+				if (outcome.ok) {
 					result.done++;
 				} else {
 					failedOnce = true;
-					result.failed.push({ id, error });
+					result.failed.push({ id, error: outcome.error });
 				}
 			},
 			(mark) => save({ listCursor: pageCursor, index: skip + mark }),
@@ -202,6 +237,27 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 	}
 	await saving;
 	return result;
+}
+
+function parsePosition(value: string): Position {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		parsed = undefined;
+	}
+	if (isRecord(parsed)) {
+		const { listCursor, index } = parsed;
+		if (
+			(listCursor === null || typeof listCursor === "string") &&
+			typeof index === "number" &&
+			Number.isSafeInteger(index) &&
+			index >= 0
+		) {
+			return { listCursor, index };
+		}
+	}
+	throw new MigratorError("migrator.bad_start_at", "startAt is not a value that updateStartAt received");
 }
 
 /**
@@ -235,13 +291,13 @@ async function withRetries(
 	retries: number,
 	signal: AbortSignal | undefined,
 	fn: () => Promise<void>,
-): Promise<unknown> {
+): Promise<{ ok: true } | { ok: false; error: unknown }> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			await fn();
-			return undefined;
-		} catch (err) {
-			if (attempt >= retries || signal?.aborted) return err;
+			return { ok: true };
+		} catch (error) {
+			if (attempt >= retries || signal?.aborted) return { ok: false, error };
 			await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
 		}
 	}

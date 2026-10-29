@@ -128,6 +128,22 @@ test("a wrong Cloudflare token fails with the API error", async () => {
 	await expect(result).rejects.toMatchObject({ code: "migrator.cloudflare_api", status: 403 });
 });
 
+test("a corrupt saved position fails with a clear error and migrates nothing", async () => {
+	for (const startAt of ["not json", JSON.stringify({ listCursor: 7, index: -1 })]) {
+		const migrated: string[] = [];
+		const result = worker.migrator().backfill({
+			cloudflare: { apiToken: "cf-token", accountId: "acc", scriptName: "my-app", className: "Room", apiUrl },
+			startAt,
+			updateStartAt: () => {},
+			migrate: async ({ id }) => {
+				migrated.push(id);
+			},
+		});
+		await expect(result).rejects.toMatchObject({ code: "migrator.bad_start_at" });
+		expect(migrated).toEqual([]);
+	}
+});
+
 test("a Durable Object that keeps failing is reported, the rest still move, and a resumed run retries it", async () => {
 	const migrator = worker.migrator();
 	const broken = objects[0]!.id;
