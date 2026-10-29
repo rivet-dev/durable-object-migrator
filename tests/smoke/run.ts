@@ -66,6 +66,14 @@ await check("resolve by id returns the name the Durable Object saved", async () 
 	assert.equal(resolved.name, name);
 });
 
+await check("a migrated Durable Object exported again still reports its alarm", async () => {
+	const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
+	for await (const page of migrator.exportObject({ binding: "ROOMS", id })) db.exec(page.sql);
+	const alarm = db.prepare(`SELECT value FROM __do_meta WHERE key = 'alarm'`).get() as { value: unknown };
+	// The fixture's seed schedules its alarm for 2099-01-01.
+	assert.equal(alarm.value, Date.UTC(2099, 0, 1));
+});
+
 await check("a KV write during the export makes it fail", async () => {
 	const dirty = `${run}-dirty`;
 	assert.equal((await app(dirty, "seed?big=1")).status, 200);

@@ -146,6 +146,20 @@ describe("after migration", () => {
 		const again = await exportInto("moved");
 		expect(again.db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
 	});
+
+	test("an object exported a second time still carries its alarm", async () => {
+		await seed(worker, "alarm-twice");
+		const { alarm } = await sourceSnapshot(worker, "alarm-twice");
+		expect(alarm).not.toBeNull();
+
+		const alarmIn = async () => {
+			const { db } = await exportInto("alarm-twice");
+			return (db.prepare(`SELECT value FROM __do_meta WHERE key = 'alarm'`).get() as { value: number | null }).value;
+		};
+		// For example, the destination failed after the last page and migrate runs again.
+		expect(await alarmIn()).toBe(alarm);
+		expect(await alarmIn()).toBe(alarm);
+	});
 });
 
 describe("auth", () => {

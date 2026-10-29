@@ -228,6 +228,11 @@ class MigratorState {
 		}
 	}
 
+	/** The alarm time saved when the object was marked migrated, until a rollback restores it. */
+	get savedAlarm(): number | null {
+		return this.#savedAlarm;
+	}
+
 	get name(): string | null {
 		return this.#savedName ?? this.ctx.id.name ?? null;
 	}
@@ -238,6 +243,7 @@ class MigratorState {
 		this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('state', 'migrated')`);
 		if (alarm !== null) {
 			this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('alarm', ?)`, alarm);
+			this.#savedAlarm = alarm;
 		}
 		this.#migrated = true;
 	}
@@ -381,7 +387,9 @@ async function exportPage(
 		return { statements: out, cursor: encodeCursor(cursor) };
 	}
 
-	const alarm = await m.ctx.storage.getAlarm();
+	// A migrated object's alarm was removed and saved, so a second export
+	// (for example after the destination failed) still reports it.
+	const alarm = (await m.ctx.storage.getAlarm()) ?? m.savedAlarm;
 	const finalCursor = cursor;
 	m.ctx.storage.transactionSync(() => {
 		for (const s of tailStatements(sql, tables, m, alarm)) push(s);
