@@ -15,8 +15,6 @@ const result = await migrator.backfill({
 		accountId: required("CF_ACCOUNT_ID"),
 		scriptName: "my-app",
 		className: "Room",
-		// Optional. Points at a stand-in for the Cloudflare API, for example in tests.
-		apiUrl: process.env.CF_API_URL,
 	},
 	// Store this somewhere durable in a real migration.
 	startAt: null,

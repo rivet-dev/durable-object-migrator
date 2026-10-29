@@ -77,15 +77,6 @@ INSERT INTO "__do_meta"(key, value) VALUES ('id', '…'), ('name', 'lobby'), ('a
 CREATE INDEX messages_body ON messages(body);                       -- indexes, triggers, views last
 ```
 
-Inside the Durable Object, the export runs plain SQL:
-
-```ts
-sql.exec(`SELECT sql FROM sqlite_master WHERE type = 'table'`)              // CREATE TABLE …
-sql.exec(`SELECT quote(rowid), … FROM "messages" WHERE (rowid) > (?) …`)    // INSERT …, keyset pages
-await ctx.storage.list({ startAfter, limit: 128 })                          // KV → __do_kv
-await ctx.storage.getAlarm()                                                // alarm → __do_meta
-```
-
 - Integers and reals go through `quote()`, so big integers and `5.0` stay exact. Text and blobs are encoded in JS.
 - Rowids are kept, even for tables without an `INTEGER PRIMARY KEY`.
 - The export does not freeze the Durable Object. The last page checks whether anything was written during the export. If nothing was, the Durable Object is marked migrated in the same transaction and starts rejecting app traffic. If something was, the export throws `MigrationDirtyError` and `migrate` runs again.

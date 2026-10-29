@@ -57,8 +57,6 @@ export async function backfill() {
 			accountId: required("CF_ACCOUNT_ID"),
 			scriptName: required("CF_SCRIPT_NAME"),
 			className: required("CF_CLASS_NAME"),
-			// Optional. Points at a stand-in for the Cloudflare API, for example in tests.
-			apiUrl: process.env.CF_API_URL,
 		},
 		startAt: saved.rows[0]?.start_at ?? null,
 		updateStartAt: async (startAt) => {

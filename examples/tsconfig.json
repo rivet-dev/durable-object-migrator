@@ -11,5 +11,5 @@
 		"noEmit": true
 	},
 	"include": ["**/*.ts"],
-	"exclude": ["**/node_modules", "alchemy"]
+	"exclude": ["alchemy"]
 }

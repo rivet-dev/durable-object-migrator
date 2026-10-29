@@ -10,7 +10,7 @@
 	},
 	"scripts": {
 		"test": "vitest run",
-		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
+		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p tests/smoke && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
 		"lint": "biome lint .",
 		"format:check": "biome format .",
 		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test"
