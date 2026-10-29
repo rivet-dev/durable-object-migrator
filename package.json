@@ -10,7 +10,7 @@
 	},
 	"scripts": {
 		"test": "vitest run",
-		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p examples",
+		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
 		"lint": "biome lint .",
 		"format:check": "biome format .",
 		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test"
@@ -19,9 +19,13 @@
 		"devalue": "^5.9.4"
 	},
 	"devDependencies": {
+		"@alchemy.run/cloudflare": "2.0.0-beta.84",
 		"@biomejs/biome": "2.3.11",
 		"@cloudflare/workers-types": "^5.20261027.1",
+		"@effect/platform-node": "4.0.6",
 		"@types/node": "^26.6.5",
+		"alchemy": "2.0.0-beta.84",
+		"effect": "4.0.6",
 		"typescript": "^5.9.3",
 		"vitest": "^5.0.5",
 		"wrangler": "^4.153.0"

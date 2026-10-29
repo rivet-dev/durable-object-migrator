@@ -12,7 +12,7 @@
 
 import { stringify } from "devalue";
 
-const ROUTE_PREFIX = "/__migrate/";
+export const ROUTE_PREFIX = "/__migrate/";
 const MIGRATOR_HEADER = "x-migrator";
 const TOKEN_ENV = "WORKER_MIGRATOR_TOKEN";
 const DISABLED_ENV = "MIGRATOR_DISABLED";
@@ -56,7 +56,10 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 		constructor(...args: any[]) {
 			super(...args);
 			const [ctx, env] = args as [DurableObjectState, Env];
-			(this as any)[STATE] = new MigratorState(ctx, env);
+			(this as any)[STATE] = new MigratorState(ctx, {
+				token: env[TOKEN_ENV] as string | undefined,
+				disabled: env[DISABLED_ENV] === "true",
+			});
 		}
 	}
 	const proto = Migratable.prototype as Record<string, any>;
@@ -141,7 +144,31 @@ async function routeToObject(req: Request, url: URL, env: Env, token: string | u
 	return ns.get(id).fetch(req);
 }
 
-class MigratorState {
+/** What `migratable` needs from the Worker's env. Adapters pass their own values. */
+export type MigratorOptions = {
+	/** The value of `WORKER_MIGRATOR_TOKEN`. */
+	token: string | undefined;
+	/** `true` when `MIGRATOR_DISABLED` is `"true"`. */
+	disabled: boolean;
+};
+
+/**
+ * The parts of a Durable Object's `ctx` the migrator uses. A narrow type, so
+ * Alchemy's `DurableObjectState` (from its own workers-types copy) fits without
+ * a cast, and type checks against the full type stay fast.
+ */
+export type MigratorContext = Pick<
+	DurableObjectState,
+	"id" | "waitUntil" | "blockConcurrencyWhile" | "getWebSockets"
+> & {
+	readonly storage: Pick<
+		DurableObjectStorage,
+		"sql" | "list" | "getAlarm" | "setAlarm" | "deleteAlarm" | "transactionSync"
+	>;
+};
+
+/** One per Durable Object instance. Adapters for other runtimes build on it. */
+export class MigratorState {
 	readonly instanceId = crypto.randomUUID();
 	readonly sql: SqlStorage | null;
 	#migrated = false;
@@ -150,8 +177,8 @@ class MigratorState {
 	#inFlight = 0;
 
 	constructor(
-		readonly ctx: DurableObjectState,
-		readonly env: Env,
+		readonly ctx: MigratorContext,
+		readonly opts: MigratorOptions,
 	) {
 		this.#countWaitUntil();
 		this.sql = sqlOrNull(ctx);
@@ -164,7 +191,7 @@ class MigratorState {
 			if (row.key === "name") this.#savedName = row.value as string;
 			if (row.key === "alarm") this.#savedAlarm = row.value as number;
 		}
-		if (this.#migrated && this.env[DISABLED_ENV] === "true" && this.#savedAlarm !== null) {
+		if (this.#migrated && this.opts.disabled && this.#savedAlarm !== null) {
 			this.#restoreAlarm(this.#savedAlarm);
 		}
 	}
@@ -204,7 +231,7 @@ class MigratorState {
 	}
 
 	isMigrated(): boolean {
-		return this.#migrated && this.env[DISABLED_ENV] !== "true";
+		return this.#migrated && !this.opts.disabled;
 	}
 
 	guard(): void {
@@ -219,18 +246,27 @@ class MigratorState {
 
 	/** Runs an app handler and counts it as in flight until it settles. */
 	async track<R>(fn: () => R | Promise<R>): Promise<R> {
-		this.#saveName();
-		this.#inFlight++;
+		this.begin();
 		try {
 			return await fn();
 		} finally {
-			this.#inFlight--;
+			this.end();
 		}
 	}
 
 	/** The alarm time saved when the object was marked migrated, until a rollback restores it. */
 	get savedAlarm(): number | null {
 		return this.#savedAlarm;
+	}
+
+	/** Counts one app handler as in flight. Call `end()` once it settles. */
+	begin(): void {
+		this.#saveName();
+		this.#inFlight++;
+	}
+
+	end(): void {
+		this.#inFlight--;
 	}
 
 	get name(): string | null {
@@ -264,7 +300,7 @@ class MigratorState {
 	}
 
 	async handle(req: Request): Promise<Response> {
-		const token = this.env[TOKEN_ENV] as string | undefined;
+		const token = this.opts.token;
 		if (!token) {
 			return errorResponse(500, "migrator.not_configured", `${TOKEN_ENV} is not set on the Worker`);
 		}
@@ -583,7 +619,7 @@ function encodeKvValue(key: string, value: unknown): string {
 	}
 }
 
-function closeWebSockets(ctx: DurableObjectState): void {
+function closeWebSockets(ctx: MigratorContext): void {
 	for (const ws of ctx.getWebSockets()) {
 		try {
 			ws.close(1012, "migrator.moved");
@@ -639,7 +675,7 @@ function sqlString(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
-function sqlOrNull(ctx: DurableObjectState): SqlStorage | null {
+function sqlOrNull(ctx: MigratorContext): SqlStorage | null {
 	try {
 		return ctx.storage.sql;
 	} catch {
@@ -678,6 +714,6 @@ function errorResponse(status: number, code: string, message: string): Response 
 	return Response.json({ error: { code, message } }, { status, headers: { [MIGRATOR_HEADER]: "1" } });
 }
 
-function movedResponse(): Response {
+export function movedResponse(): Response {
 	return errorResponse(503, "migrator.moved", "this Durable Object was migrated to a new server");
 }

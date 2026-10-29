@@ -30,6 +30,8 @@ This is a repo, not a package. Copy two files:
 | [`src/worker.ts`](src/worker.ts) | Your Cloudflare Worker | Adds the export route, and blocks a Durable Object once it is copied |
 | [`src/client.ts`](src/client.ts) | Your new server | Copies each Durable Object's data, and finds the ones nobody used |
 
+On [Alchemy](https://alchemy.run) with Effect-native Durable Objects, also copy [`src/alchemy.ts`](src/alchemy.ts). See the [guide](docs/guide.md#alchemy).
+
 **Worker:**
 
 ```ts
@@ -72,6 +74,8 @@ Call `migrate` before you handle a request for that Durable Object. Run `migrato
 |---|---|---|
 | Worker | `migratable(DOClass)` | Wraps your Durable Object class. Adds the export, and blocks requests once it is copied. |
 | Worker | `migrationRoute(req, env, { token })` | Handles the migrator's requests (`/__migrate/*`). Returns `null` for everything else, so your app handles it. |
+| Alchemy | `Migrator.migratable(effect)` | `src/alchemy.ts`. Wraps an Effect-native Durable Object. After migration its RPC methods fail with `MigrationMovedError`. |
+| Alchemy | `yield* Migrator.withMigrationRoute(app)` | `src/alchemy.ts`. Gives back your Worker's fetch with `/__migrate/*` handled first. |
 | Server | `createClient({ workerUrl, token })` | Connects to your Worker |
 | Server | `migrator.exportObject({ binding, id })` | Returns the Durable Object's data as SQL, one page at a time. Throws `MigrationDirtyError` if it was written to during the copy. |
 | Server | `migrator.resolve(binding, { name } \| { id })` | Converts a name to an id, or an id to its name |
@@ -85,7 +89,7 @@ Call `migrate` before you handle a request for that Durable Object. Run `migrato
 ## Resources
 
 - [Guide](docs/guide.md): how to switch over, how to roll back, and what is not supported.
-- [Examples](examples/): copy into a `.sqlite` file, track progress in Postgres, copy into Rivet Actors.
+- [Examples](examples/): copy into a `.sqlite` file, track progress in Postgres, copy into Rivet Actors, set up a Worker on Alchemy.
 - [Migration skill](skills/durable-object-migrator/SKILL.md): give it to your coding agent to set this up in your project.
 - [Discord](https://rivet.dev/discord): questions and support.
 

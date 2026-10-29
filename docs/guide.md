@@ -107,6 +107,46 @@ The migrator never deletes data on Cloudflare. Its writes are its own `__migrato
 - When a Durable Object is copied, its pending alarm is removed, so scheduled work cannot run on the old copy. The new server gets the alarm time in `__do_meta`.
 - With `MIGRATOR_DISABLED=true`, the alarm is set again the next time the object starts. If its time has passed, it runs right away. An object that gets no request after rollback keeps its alarm off until it does.
 
+## Alchemy
+
+[Alchemy v2](https://alchemy.run) has two ways to write a Durable Object. Both can be migrated. See [`examples/alchemy/`](../examples/alchemy/).
+
+**Plain class.** Wrap it with `migratable` and add `migrationRoute`, as in the [README](../README.md#getting-started). Put the token and the rollback flag in the Worker's env:
+
+```ts
+export const Worker = Cloudflare.Worker("Worker", {
+  main: "./src/worker.ts",
+  env: {
+    ROOMS: Rooms,
+    WORKER_MIGRATOR_TOKEN: Config.Redacted("WORKER_MIGRATOR_TOKEN"),
+    MIGRATOR_DISABLED: Config.String("MIGRATOR_DISABLED").pipe(Config.withDefault("false")),
+  },
+});
+```
+
+**Effect-native.** Alchemy writes the class for you, so there is no class to wrap. Copy [`src/alchemy.ts`](../src/alchemy.ts) next to `src/worker.ts` and wrap the Effect instead:
+
+```ts
+import * as Migrator from "./alchemy"; // src/alchemy.ts
+
+export default class Room extends Cloudflare.DurableObject<Room>()(
+  "Room",
+  Migrator.migratable(Effect.gen(function* () { /* your Durable Object */ })),
+) {}
+
+// In your Worker's init:
+return { fetch: yield* Migrator.withMigrationRoute(app) };
+```
+
+- The adapter reads `WORKER_MIGRATOR_TOKEN` and `MIGRATOR_DISABLED` with `Config`, so Alchemy adds them to the Worker. Set them in `.env` before you deploy.
+- After migration, every RPC method fails with `MigrationMovedError`. It is part of each method's error type, so you can handle it with `Effect.catchTag("MigrationMovedError", ...)`. Your methods keep their own argument and return types.
+- The binding name is the Durable Object's name: `exportObject({ binding: "Room", id })`.
+
+For both kinds:
+
+- Backfill needs the Worker's script name. Use the `workerName` output of your stack, not the stack name.
+- If you read env directly in an Effect Worker (for example through `Cloudflare.WorkerEnvironment`), values that Alchemy bound from `Config` arrive wrapped, as `{"_tag":"Redacted","value":"..."}`. Read them with `Config` instead.
+
 ## Limits
 
 | Limit | What it means |
@@ -120,5 +160,6 @@ The migrator never deletes data on Cloudflare. Its writes are its own `__migrato
 | Virtual tables (FTS5) | Not supported. The export fails with a clear error. |
 | Writes from background work after its request returns | Covered when the work goes through `ctx.waitUntil`: an export cannot finish while it is pending. Work that is neither awaited nor passed to `ctx.waitUntil` (a floating promise, a detached Effect fiber) can still write after migration and be lost. |
 | Sockets accepted with `ws.accept()` instead of hibernation | Not closed after migration |
+| Alchemy alarm callbacks (`Alchemy.makeCallback`) | A callback that is still running when an export finishes is not counted as in flight, so a write it makes after that point stays on the old copy. The export removes the pending alarm, so no new callback starts after migration. |
 | KV-backed (non-SQLite) Durable Objects | Not supported |
 | Every finished export marks the Durable Object migrated | There is no backup-only export yet. Exporting a Durable Object moves it. |
