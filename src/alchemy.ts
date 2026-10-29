@@ -56,73 +56,70 @@ const MigratorConfig = Config.all({
 
 const moved = () => new MigrationMovedError({ message: "this Durable Object was migrated to a new server" });
 
-/** Counts `effect` as in flight until it ends, so an export cannot finish while it may still write. */
-const counted = <A, E, R>(m: MigratorState, effect: Effect.Effect<A, E, R>) =>
+// Checks and counts in one step. A fiber can yield between two steps, and
+// the last export page could mark the object migrated in that gap.
+const enter = (m: MigratorState) =>
+	Effect.sync(() => {
+		if (m.isMigrated()) return false;
+		m.begin();
+		return true;
+	});
+
+const leave = (m: MigratorState) => (entered: boolean) => (entered ? Effect.sync(() => m.end()) : Effect.void);
+
+// Not `Effect.scoped`, which would close the per-call Scope that Alchemy keeps open.
+const tracked = <A, E, R, B, E2>(m: MigratorState, self: Effect.Effect<A, E, R>, onMoved: () => Effect.Effect<B, E2>) =>
 	Effect.acquireUseRelease(
-		Effect.sync(() => m.begin()),
-		() => effect,
-		() => Effect.sync(() => m.end()),
+		enter(m),
+		(entered): Effect.Effect<A | B, E | E2, R> => (entered ? self : onMoved()),
+		leave(m),
 	);
 
-const guarded = <A, E, R>(m: MigratorState, effect: Effect.Effect<A, E, R>) =>
-	Effect.suspend(
-		(): Effect.Effect<A, E | MigrationMovedError, R> => (m.isMigrated() ? Effect.fail(moved()) : counted(m, effect)),
-	);
-
-const guardedStream = <A, E, R>(m: MigratorState, stream: Stream.Stream<A, E, R>) =>
+// Counted from the first pull until the stream ends, so an unread stream is never counted.
+const trackedStream = <A, E, R>(m: MigratorState, self: Stream.Stream<A, E, R>) =>
 	Stream.unwrap(
-		Effect.suspend(
-			(): Effect.Effect<Stream.Stream<A, E, R>, MigrationMovedError> =>
-				m.isMigrated()
-					? Effect.fail(moved())
-					: Effect.sync(() => {
-							m.begin();
-							return stream.pipe(Stream.ensuring(Effect.sync(() => m.end())));
-						}),
+		Effect.acquireRelease(enter(m), leave(m)).pipe(
+			Effect.map((entered): Stream.Stream<A, E | MigrationMovedError, R> => (entered ? self : Stream.fail(moved()))),
 		),
 	);
 
+const failMoved = () => Effect.fail(moved());
+
 // The export closes every hibernated WebSocket, so an event that still
 // arrives is an error, as it is for a plain class.
-const guardedHandler = <E, R>(m: MigratorState, effect: Effect.Effect<void, E, R>) =>
-	Effect.suspend(() => (m.isMigrated() ? Effect.die(moved()) : counted(m, effect)));
+const dieMoved = () => Effect.die(moved());
 
 // Alchemy builds every request from a web Request, so this gives it back unchanged.
 const webRequest = HttpServerRequest.HttpServerRequest.pipe(Effect.flatMap(HttpServerRequest.toWeb), Effect.orDie);
 
 function guardMember(m: MigratorState, member: unknown): unknown {
-	if (Effect.isEffect(member)) return guarded(m, member);
-	if (Stream.isStream(member)) return guardedStream(m, member);
+	if (Effect.isEffect(member)) return tracked(m, member, failMoved);
+	if (Stream.isStream(member)) return trackedStream(m, member);
 	if (typeof member !== "function") return member;
 	return (...args: ReadonlyArray<unknown>) => guardMember(m, Reflect.apply(member, undefined, args));
 }
 
 function guardShape<S extends Shape>(shape: S, m: MigratorState): Migratable<S> {
 	const { alarm, webSocketMessage, webSocketClose, webSocketError } = shape;
-	const appFetch = shape.fetch;
+	const appFetch = shape.fetch ?? Effect.succeed(HttpServerResponse.text("Not implemented", { status: 404 }));
 	const handlers: Cloudflare.DurableObjectShape = {
 		fetch: Effect.gen(function* () {
 			const req = yield* webRequest;
 			if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) {
 				return HttpServerResponse.fromWeb(yield* Effect.promise(() => m.handle(req)));
 			}
-			if (m.isMigrated()) return HttpServerResponse.fromWeb(movedResponse());
-			if (appFetch === undefined) return HttpServerResponse.text("Not implemented", { status: 404 });
-			return yield* counted(m, appFetch);
+			return yield* tracked(m, appFetch, () => Effect.succeed(HttpServerResponse.fromWeb(movedResponse())));
 		}),
 		// The export already saved the alarm time for the new server.
-		...(alarm && {
-			alarm: (info?: Cloudflare.AlarmInvocationInfo) =>
-				Effect.suspend(() => (m.isMigrated() ? Effect.void : counted(m, alarm(info)))),
-		}),
+		...(alarm && { alarm: (info?: Cloudflare.AlarmInvocationInfo) => tracked(m, alarm(info), () => Effect.void) }),
 		...(webSocketMessage && {
-			webSocketMessage: (ws, message) => guardedHandler(m, webSocketMessage(ws, message)),
+			webSocketMessage: (ws, message) => tracked(m, webSocketMessage(ws, message), dieMoved),
 		}),
 		...(webSocketClose && {
-			webSocketClose: (ws, code, reason, wasClean) => guardedHandler(m, webSocketClose(ws, code, reason, wasClean)),
+			webSocketClose: (ws, code, reason, wasClean) => tracked(m, webSocketClose(ws, code, reason, wasClean), dieMoved),
 		}),
 		...(webSocketError && {
-			webSocketError: (ws, error) => guardedHandler(m, webSocketError(ws, error)),
+			webSocketError: (ws, error) => tracked(m, webSocketError(ws, error), dieMoved),
 		}),
 	};
 	const rpc = Object.fromEntries(Object.entries(shape).map(([key, member]) => [key, guardMember(m, member)]));
@@ -146,13 +143,8 @@ export const migratable = Effect.fn("Migrator.migratable")(function* <S extends 
 	// Alchemy's Durable Object init cannot fail, so a missing token stops it as a defect.
 	const config = yield* MigratorConfig.pipe(Effect.orDie);
 	const instance = yield* impl;
-	return Effect.gen(function* () {
-		const shape = yield* instance;
-		const m = yield* Effect.sync(
-			() => new MigratorState(state.raw, { token: Redacted.value(config.token), disabled: config.disabled }),
-		);
-		return guardShape(shape, m);
-	});
+	const options = { token: Redacted.value(config.token), disabled: config.disabled };
+	return Effect.map(instance, (shape) => guardShape(shape, new MigratorState(state.raw, options)));
 });
 
 /**
