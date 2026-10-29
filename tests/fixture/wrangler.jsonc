@@ -6,7 +6,14 @@
 	"compatibility_date": "2026-07-01",
 	"workers_dev": true,
 	"durable_objects": {
-		"bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "PLAIN", "class_name": "Plain" }]
+		"bindings": [
+			{ "name": "ROOMS", "class_name": "Room" },
+			{ "name": "KV_ROOMS", "class_name": "KvRoom" },
+			{ "name": "PLAIN", "class_name": "Plain" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }, { "tag": "v2", "new_sqlite_classes": ["Plain"] }]
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Room"] },
+		{ "tag": "v2", "new_classes": ["KvRoom"], "new_sqlite_classes": ["Plain"] }
+	]
 }

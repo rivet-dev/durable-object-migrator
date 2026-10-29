@@ -197,27 +197,28 @@ export class MigratorState {
 		readonly opts: MigratorOptions,
 	) {
 		this.#countWaitUntil();
-		this.sql = sqlOrNull(ctx);
-		if (!this.sql) return;
+		const sql = sqlOrNull(ctx);
+		this.sql = sql;
+		if (!sql) return;
 		// Created the first time the migrator saves state, such as the object's name.
-		const exists = this.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = ?`, STATE_TABLE).toArray().length > 0;
+		const exists = sql.exec(`SELECT 1 FROM sqlite_master WHERE name = ?`, STATE_TABLE).toArray().length > 0;
 		if (!exists) return;
-		for (const row of this.sql.exec(`SELECT key, value FROM "${STATE_TABLE}"`)) {
+		for (const row of sql.exec(`SELECT key, value FROM "${STATE_TABLE}"`)) {
 			if (row.key === "state") this.#migrated = row.value === "migrated";
 			if (row.key === "name") this.#savedName = row.value as string;
 			if (row.key === "alarm") this.#savedAlarm = row.value as number;
 		}
 		if (this.#migrated && this.opts.disabled && this.#savedAlarm !== null) {
-			this.#restoreAlarm(this.#savedAlarm);
+			this.#restoreAlarm(sql, this.#savedAlarm);
 		}
 	}
 
 	// Rollback: the export removed the alarm, so put it back. A time already in
 	// the past makes it run right away.
-	#restoreAlarm(at: number): void {
+	#restoreAlarm(sql: SqlStorage, at: number): void {
 		this.ctx.blockConcurrencyWhile(async () => {
 			if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at);
-			this.sql!.exec(`DELETE FROM "${STATE_TABLE}" WHERE key = 'alarm'`);
+			sql.exec(`DELETE FROM "${STATE_TABLE}" WHERE key = 'alarm'`);
 			this.#savedAlarm = null;
 		});
 	}
@@ -291,10 +292,10 @@ export class MigratorState {
 
 	/** `alarm` is the pending alarm the export saw. It is kept so a rollback can set it again. */
 	markMigrated(alarm: number | null): void {
-		this.#ensureStateTable();
-		this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('state', 'migrated')`);
+		const sql = this.#ensureStateTable();
+		sql.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('state', 'migrated')`);
 		if (alarm !== null) {
-			this.sql!.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('alarm', ?)`, alarm);
+			sql.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('alarm', ?)`, alarm);
 			this.#savedAlarm = alarm;
 		}
 		this.#migrated = true;
@@ -306,13 +307,16 @@ export class MigratorState {
 	#saveName(): void {
 		const name = this.ctx.id.name;
 		if (!this.sql || !name || name === this.#savedName) return;
-		this.#ensureStateTable();
-		this.sql.exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('name', ?)`, name);
+		this.#ensureStateTable().exec(`INSERT OR REPLACE INTO "${STATE_TABLE}"(key, value) VALUES ('name', ?)`, name);
 		this.#savedName = name;
 	}
 
-	#ensureStateTable(): void {
-		this.sql!.exec(`CREATE TABLE IF NOT EXISTS "${STATE_TABLE}"(key TEXT PRIMARY KEY, value)`);
+	#ensureStateTable(): SqlStorage {
+		if (!this.sql) {
+			throw new MigratorError(501, "migrator.unsupported", "only SQLite-backed Durable Objects can be migrated");
+		}
+		this.sql.exec(`CREATE TABLE IF NOT EXISTS "${STATE_TABLE}"(key TEXT PRIMARY KEY, value)`);
+		return this.sql;
 	}
 
 	async handle(req: Request): Promise<Response> {
@@ -731,9 +735,13 @@ function sqlString(value: string): string {
 	return `'${value.replace(/'/g, "''")}'`;
 }
 
+// A key-value backed object still returns `storage.sql`, but every use of it
+// throws, so this reads one property to find out.
 function sqlOrNull(ctx: MigratorContext): SqlStorage | null {
 	try {
-		return ctx.storage.sql;
+		const sql = ctx.storage.sql;
+		void sql.databaseSize;
+		return sql;
 	} catch {
 		return null;
 	}

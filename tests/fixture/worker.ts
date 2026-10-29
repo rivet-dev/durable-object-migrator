@@ -6,6 +6,7 @@ import { snapshot } from "./snapshot";
 // An interface, as `wrangler types` generates.
 interface Env {
 	ROOMS: DurableObjectNamespace<RoomImpl>;
+	KV_ROOMS: DurableObjectNamespace;
 	PLAIN: DurableObjectNamespace;
 	WORKER_MIGRATOR_TOKEN: string;
 }
@@ -123,6 +124,9 @@ class RoomImpl extends DurableObject<Env> {
 }
 
 export const Room = migratable(RoomImpl);
+
+// Uses the key-value storage backend, which the migrator cannot export.
+export const KvRoom = migratable(class KvRoomImpl extends DurableObject<Env> {});
 
 // Not wrapped with migratable and has no fetch, as when a user forgets to wrap a class.
 export class Plain extends DurableObject<Env> {}

@@ -115,6 +115,14 @@ describe("bad requests", () => {
 		}
 	});
 
+	test("a Durable Object with key-value storage is reported as unsupported", async () => {
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("KV_ROOMS", { name: "kv" });
+
+		const pages = migrator.exportObject({ binding: "KV_ROOMS", id });
+		await expect(pages.next()).rejects.toMatchObject({ code: "migrator.unsupported", status: 501 });
+	});
+
 	test("a binding whose class is not wrapped with migratable fails with the real error", async () => {
 		const migrator = worker.migrator();
 		const { id } = await migrator.resolve("PLAIN", { name: "plain" });
