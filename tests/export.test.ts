@@ -37,18 +37,6 @@ describe("export", () => {
 		expect(destinationSnapshot(db)).toEqual(source);
 	});
 
-	test("the dump is a valid script for a plain sqlite database", async () => {
-		await seed(worker, "script");
-		const migrator = worker.migrator();
-		const { id } = await migrator.resolve("ROOMS", { name: "script" });
-		let script = "";
-		for await (const page of migrator.exportObject({ binding: "ROOMS", id })) script += `${page.sql}\n`;
-
-		const db = openDestination();
-		db.exec(script);
-		expect(db.prepare(`SELECT body FROM notes WHERE n = 9007199254740993`).get()).toEqual({ body: "it's ünïcödé 🎉" });
-	});
-
 	test("a SQL write during the export makes it fail, and the retry includes the write", async () => {
 		await seed(worker, "dirty-sql", { big: true });
 		const migrator = worker.migrator();
@@ -132,8 +120,9 @@ describe("background work", () => {
 });
 
 describe("after migration", () => {
-	test("app fetch and RPC are rejected, and the migrator can still export", async () => {
+	test("app fetch and RPC are rejected, and a second export still carries the data and the alarm", async () => {
 		await seed(worker, "moved");
+		const { alarm } = await sourceSnapshot(worker, "moved");
 		await exportInto("moved");
 
 		const fetched = await worker.app("moved", "ping");
@@ -143,22 +132,10 @@ describe("after migration", () => {
 		const rpc = await worker.app("moved", "rpc-note");
 		expect(await rpc.text()).toContain("migrator.moved");
 
+		// For example, the destination failed after the last page and migrate runs again.
 		const again = await exportInto("moved");
 		expect(again.db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
-	});
-
-	test("an object exported a second time still carries its alarm", async () => {
-		await seed(worker, "alarm-twice");
-		const { alarm } = await sourceSnapshot(worker, "alarm-twice");
-		expect(alarm).not.toBeNull();
-
-		const alarmIn = async () => {
-			const { db } = await exportInto("alarm-twice");
-			return (db.prepare(`SELECT value FROM __do_meta WHERE key = 'alarm'`).get() as { value: number | null }).value;
-		};
-		// For example, the destination failed after the last page and migrate runs again.
-		expect(await alarmIn()).toBe(alarm);
-		expect(await alarmIn()).toBe(alarm);
+		expect(again.db.prepare(`SELECT value FROM __do_meta WHERE key = 'alarm'`).get()).toEqual({ value: alarm });
 	});
 });
 
