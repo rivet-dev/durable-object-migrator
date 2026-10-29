@@ -183,7 +183,7 @@ export class MigratorState {
 		this.#countWaitUntil();
 		this.sql = sqlOrNull(ctx);
 		if (!this.sql) return;
-		// Created on first write, so a Durable Object nobody migrates stays untouched.
+		// Created the first time the migrator saves state, such as the object's name.
 		const exists = this.sql.exec(`SELECT 1 FROM sqlite_master WHERE name = ?`, STATE_TABLE).toArray().length > 0;
 		if (!exists) return;
 		for (const row of this.sql.exec(`SELECT key, value FROM "${STATE_TABLE}"`)) {
@@ -426,12 +426,11 @@ async function exportPage(
 	// A migrated object's alarm was removed and saved, so a second export
 	// (for example after the destination failed) still reports it.
 	const alarm = (await m.ctx.storage.getAlarm()) ?? m.savedAlarm;
-	const finalCursor = cursor;
 	m.ctx.storage.transactionSync(() => {
 		for (const s of tailStatements(sql, tables, m, alarm)) push(s);
 		// The dirty check and the flag share one synchronous transaction, so no
 		// write can land between them.
-		assertClean(m, sql, finalCursor);
+		assertClean(m, sql, cursor);
 		if (m.inFlight > 0) {
 			throw new MigratorError(409, "migrator.dirty", "app requests were still running when the export finished");
 		}
@@ -520,7 +519,7 @@ function readRows(
 	const statements: string[] = [];
 	let used = 0;
 	let lastKey = after;
-	while (used < budget || statements.length === 0) {
+	while (true) {
 		const where = lastKey ? `WHERE (${orderBy}) > (${lastKey.map(assertLiteral).join(", ")})` : "";
 		const rows = [
 			...sql
@@ -540,7 +539,6 @@ function readRows(
 		}
 		if (rows.length < ROWS_PER_QUERY) return { statements, lastKey, done: true };
 	}
-	return { statements, lastKey, done: false };
 }
 
 function tailStatements(sql: SqlStorage, tables: TableInfo[], m: MigratorState, alarm: number | null): string[] {
