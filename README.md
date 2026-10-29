@@ -59,7 +59,10 @@ The paths below are examples. Use your own layout.
 
 ### Step 1: Add the migrator to your Durable Object
 
-![The Worker routes app traffic to your app and /__migrate/* to the migrator](docs/images/step-1-wrap.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/step-1-wrap-dark.svg">
+  <img alt="The Worker routes app traffic to your app and /__migrate/* to the migrator" src="docs/images/step-1-wrap.svg">
+</picture>
 
 🟠 **Cloudflare Worker:** edit your Worker's entry file.
 
@@ -89,7 +92,10 @@ Set `WORKER_MIGRATOR_TOKEN` with `wrangler secret put` and deploy. Nothing chang
 
 Lazy migration copies each Durable Object the first time someone uses it. When a request comes in, the New Server copies that one Durable Object's data from Cloudflare, then handles the request. Busy objects move right after cutover, and each user waits only once.
 
-![On first request the new server resolves the id, copies the Durable Object, then runs your app](docs/images/step-2-lazy.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/step-2-lazy-dark.svg">
+  <img alt="On first request the new server resolves the id, copies the Durable Object, then runs your app" src="docs/images/step-2-lazy.svg">
+</picture>
 
 🟢 **New Server:** write the `migrate` function. It copies one Durable Object's data into whatever replaces it on the new server. In this example, each `Room` Durable Object becomes rows in Postgres tables keyed by `room_id`. Steps 2 and 3 both call `migrate`.
 
@@ -141,7 +147,10 @@ Deploy the new server. It gets no traffic until step 4.
 
 Backfill copies the Durable Objects that get no requests, so nothing is left behind on Cloudflare. A script lists every Durable Object and runs the same `migrate` function on each one. It skips the ones lazy migration already copied, and resumes where it left off if it stops.
 
-![The backfill script lists every Durable Object and runs migrate on the ones not copied yet](docs/images/step-3-backfill.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/step-3-backfill-dark.svg">
+  <img alt="The backfill script lists every Durable Object and runs migrate on the ones not copied yet" src="docs/images/step-3-backfill.svg">
+</picture>
 
 🟢 **New Server:** write a script that copies every Durable Object nobody requested.
 
@@ -163,7 +172,10 @@ Don't run it yet. Cloudflare's list API shows new Durable Objects only after a f
 
 ### Step 4: Cut over DNS
 
-![Point DNS at the new server, wait, run backfill, then run it again](docs/images/step-4-cutover.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/step-4-cutover-dark.svg">
+  <img alt="Point DNS at the new server, wait, run backfill, then run it again" src="docs/images/step-4-cutover.svg">
+</picture>
 
 1. Point your domain at the new server. Durable Objects now move on first use.
 2. Wait a few minutes, then run `server/scripts/backfill.ts`.
@@ -171,7 +183,10 @@ Don't run it yet. Cloudflare's list API shows new Durable Objects only after a f
 
 ### Rollback
 
-![Point DNS back at the Worker and set MIGRATOR_DISABLED=true](docs/images/rollback.svg)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/rollback-dark.svg">
+  <img alt="Point DNS back at the Worker and set MIGRATOR_DISABLED=true" src="docs/images/rollback.svg">
+</picture>
 
 1. Point your domain back at Cloudflare.
 2. Set `MIGRATOR_DISABLED=true` on the Worker. Every Durable Object serves requests again.

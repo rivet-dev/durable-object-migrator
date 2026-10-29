@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="306" viewBox="0 0 800 306" role="img" aria-label="Point DNS at the new server, wait, run backfill, then run it again">
+<style>
+.s{font-family:system-ui,-apple-system,&quot;Segoe UI&quot;,Helvetica,Arial,sans-serif;fill:#E6EDF3}
+.m{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;fill:#E6EDF3}
+.mu{fill:#9DA7B3}
+.b{font-weight:600}
+.cap{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;font-weight:600;letter-spacing:.14em}
+</style>
+<defs>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#E6EDF3"/></marker>
+<marker id="af" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6E7681"/></marker>
+</defs>
+<rect x="32" y="70" width="190" height="44" rx="7" fill="#161B22" stroke="#E6EDF3" stroke-width="1.4"/><text class="m" x="48" y="97.0" font-size="13" text-anchor="start" >app.example.com</text>
+<rect x="560" y="24" width="208" height="52" rx="7" fill="#3B2412" stroke="#F38020" stroke-width="1.4"/>
+<text class="s b" x="576" y="55.0" font-size="14" text-anchor="start" >Cloudflare Worker</text>
+<rect x="560" y="112" width="208" height="52" rx="7" fill="#10301E" stroke="#3FB96B" stroke-width="1.4"/>
+<text class="s b" x="576" y="143.0" font-size="14" text-anchor="start" >New Server</text>
+<path d="M222 84 C 380 84, 400 50, 554 50" fill="none" stroke="#6E7681" stroke-width="1.4" stroke-dasharray="6 5" marker-end="url(#af)"/>
+<text class="s mu" x="390" y="58" font-size="12" text-anchor="middle" >before</text>
+<path d="M222 100 C 380 100, 400 138, 554 138" fill="none" stroke="#E6EDF3" stroke-width="1.4" marker-end="url(#a)"/>
+<text class="s b" x="390" y="134" font-size="12" text-anchor="middle" >after</text>
+<line x1="60" y1="210" x2="740" y2="210" stroke="#6E7681" stroke-width="1.4"/>
+<circle cx="120" cy="210" r="13" fill="#161B22" stroke="#E6EDF3" stroke-width="1.4"/>
+<text class="s b" x="120" y="215" font-size="13" text-anchor="middle" >1</text>
+<text class="s" x="120" y="246" font-size="13" text-anchor="middle" >Point DNS</text>
+<circle cx="400" cy="210" r="13" fill="#161B22" stroke="#E6EDF3" stroke-width="1.4"/>
+<text class="s b" x="400" y="215" font-size="13" text-anchor="middle" >2</text>
+<text class="s" x="400" y="246" font-size="13" text-anchor="middle" >Run backfill</text>
+<circle cx="680" cy="210" r="13" fill="#161B22" stroke="#E6EDF3" stroke-width="1.4"/>
+<text class="s b" x="680" y="215" font-size="13" text-anchor="middle" >3</text>
+<text class="s" x="680" y="246" font-size="13" text-anchor="middle" >Run it again</text>
+<text class="s mu" x="260" y="200" font-size="12" text-anchor="middle" >~5 min</text>
+<rect x="24" y="279" width="14" height="14" rx="3" fill="#3B2412" stroke="#F38020" stroke-width="1.4"/>
+<text class="s mu" x="46" y="290" font-size="12" text-anchor="start" >Cloudflare Worker</text>
+<rect x="170.2" y="279" width="14" height="14" rx="3" fill="#10301E" stroke="#3FB96B" stroke-width="1.4"/>
+<text class="s mu" x="192.2" y="290" font-size="12" text-anchor="start" >New Server</text>
+</svg>
