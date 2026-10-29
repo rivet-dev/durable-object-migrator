@@ -40,21 +40,23 @@ export type ExportPage = {
 	/** The statements of this page joined into one SQL script. */
 	sql: string;
 	/** The same statements one by one, for databases that run one statement per call. */
-	statements: string[];
+	statements: readonly string[];
+};
+
+export type CloudflareOptions = {
+	/** Needs a Workers read permission. */
+	apiToken: string;
+	accountId: string;
+	/** Your Worker's name. */
+	scriptName: string;
+	/** The Durable Object class name, for example "Room". */
+	className: string;
+	/** Override the Cloudflare API base URL. */
+	apiUrl?: string;
 };
 
 export type BackfillOptions = {
-	cloudflare: {
-		/** Needs a Workers read permission. */
-		apiToken: string;
-		accountId: string;
-		/** Your Worker's name. */
-		scriptName: string;
-		/** The Durable Object class name, for example "Room". */
-		className: string;
-		/** Override the Cloudflare API base URL. */
-		apiUrl?: string;
-	};
+	cloudflare: CloudflareOptions;
 	/** The value last passed to `updateStartAt`, or `null` to start from the beginning. */
 	startAt: string | null;
 	/** Save this value so a crashed backfill can resume. */
@@ -71,11 +73,21 @@ export type BackfillOptions = {
 
 export type BackfillResult = {
 	done: number;
-	failed: { id: string; error: unknown }[];
+	failed: readonly { readonly id: string; readonly error: unknown }[];
 };
 
 type ExportResponse = { statements: string[]; cursor: string | null };
 type ResolveResponse = { id: string; name: string | null };
+
+export type MigratorClient = {
+	exportObject(target: {
+		binding: string;
+		id: string;
+		signal?: AbortSignal;
+	}): AsyncGenerator<ExportPage, void, undefined>;
+	resolve(binding: string, target: { name: string } | { id: string }): Promise<ResolveResponse>;
+	backfill(opts: BackfillOptions): Promise<BackfillResult>;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
@@ -101,7 +113,7 @@ function readError(body: unknown): { code: string; message: string } | null {
 	return typeof code === "string" && typeof message === "string" ? { code, message } : null;
 }
 
-export function createClient(opts: ClientOptions) {
+export function createClient(opts: ClientOptions): MigratorClient {
 	const call = async <T>(
 		binding: string,
 		action: string,
@@ -140,17 +152,16 @@ export function createClient(opts: ClientOptions) {
 		 *
 		 * Throws `MigrationDirtyError` if the object was written to during the export.
 		 */
-		async *exportObject(target: { binding: string; id: string; signal?: AbortSignal }): AsyncGenerator<ExportPage> {
-			const fetchPage = (cursor: string) => {
-				const params: Record<string, string> = { id: target.id };
-				if (cursor) params.cursor = cursor;
+		async *exportObject(target) {
+			const fetchPage = (cursor: string | null) => {
+				const params: Record<string, string> = cursor === null ? { id: target.id } : { id: target.id, cursor };
 				const p = call(target.binding, "export", params, readExport, target.signal);
 				// Handled when awaited. This only stops an unhandled rejection if the caller stops early.
 				p.catch(() => {});
 				return p;
 			};
 
-			let next = fetchPage("");
+			let next = fetchPage(null);
 			while (true) {
 				const page = await next;
 				// Fetch the next page while the caller writes this one, so the
@@ -162,13 +173,13 @@ export function createClient(opts: ClientOptions) {
 		},
 
 		/** Turns a name into an id (does not wake the Durable Object), or an id into its saved name (wakes it). */
-		resolve(binding: string, target: { name: string } | { id: string }): Promise<{ id: string; name: string | null }> {
+		resolve(binding, target) {
 			return call(binding, "resolve", "name" in target ? { name: target.name } : { id: target.id }, readResolve);
 		},
 
 		/** Lists every Durable Object with stored data and runs `migrate` on each one. */
-		backfill(opts: BackfillOptions): Promise<BackfillResult> {
-			return backfill(opts);
+		backfill(backfillOpts) {
+			return backfill(backfillOpts);
 		},
 	};
 }
@@ -181,7 +192,8 @@ type Position = { listCursor: string | null; index: number };
 async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 	const concurrency = opts.concurrency ?? 8;
 	const retries = opts.retries ?? 3;
-	const result: BackfillResult = { done: 0, failed: [] };
+	const failed: { id: string; error: unknown }[] = [];
+	let done = 0;
 
 	let saved = opts.startAt;
 	let saving = Promise.resolve();
@@ -217,10 +229,10 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 				if (id == null) return;
 				const outcome = await withRetries(retries, opts.signal, () => opts.migrate({ id }));
 				if (outcome.ok) {
-					result.done++;
+					done++;
 				} else {
 					failedOnce = true;
-					result.failed.push({ id, error: outcome.error });
+					failed.push({ id, error: outcome.error });
 				}
 			},
 			(mark) => save({ listCursor: pageCursor, index: skip + mark }),
@@ -236,7 +248,7 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 		await save({ listCursor, index: 0 });
 	}
 	await saving;
-	return result;
+	return { done, failed };
 }
 
 function parsePosition(value: string): Position {
@@ -303,17 +315,16 @@ async function withRetries(
 	}
 }
 
-async function cloudflareGet<T>(
-	cf: BackfillOptions["cloudflare"],
-	path: string,
-): Promise<{ result: T; result_info?: any }> {
+type ResultInfo = { total_pages?: number; cursor?: string };
+
+async function cloudflareGet<T>(cf: CloudflareOptions, path: string): Promise<{ result: T; result_info?: ResultInfo }> {
 	const res = await fetch(`${cf.apiUrl ?? CLOUDFLARE_API}/accounts/${cf.accountId}${path}`, {
 		headers: { authorization: `Bearer ${cf.apiToken}` },
 	});
 	const body = (await res.json().catch(() => null)) as {
 		success?: boolean;
 		result: T;
-		result_info?: any;
+		result_info?: ResultInfo;
 		errors?: unknown;
 	} | null;
 	if (!res.ok || !body?.success) {
@@ -326,7 +337,7 @@ async function cloudflareGet<T>(
 	return body;
 }
 
-async function findNamespace(cf: BackfillOptions["cloudflare"]): Promise<string> {
+async function findNamespace(cf: CloudflareOptions): Promise<string> {
 	type Namespace = { id: string; script?: string; class?: string };
 	const seen: string[] = [];
 	for (let page = 1; ; page++) {
@@ -345,7 +356,7 @@ async function findNamespace(cf: BackfillOptions["cloudflare"]): Promise<string>
 }
 
 async function listObjects(
-	cf: BackfillOptions["cloudflare"],
+	cf: CloudflareOptions,
 	namespaceId: string,
 	cursor: string | null,
 ): Promise<{ ids: (string | null)[]; nextCursor: string | null }> {

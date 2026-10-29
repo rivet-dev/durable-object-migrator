@@ -63,10 +63,11 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	const base = Base.prototype as Record<string, any>;
 
 	class Migratable extends Base {
+		readonly [STATE]: MigratorState;
 		constructor(...args: any[]) {
 			super(...args);
 			const [ctx, env] = args as [DurableObjectState, Env];
-			(this as any)[STATE] = new MigratorState(ctx, {
+			this[STATE] = new MigratorState(ctx, {
 				token: envString(env, TOKEN_ENV),
 				disabled: envString(env, DISABLED_ENV) === "true",
 			});
@@ -74,7 +75,7 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	}
 	const proto = Migratable.prototype as Record<string, any>;
 
-	proto.fetch = async function (this: any, req: Request): Promise<Response> {
+	proto.fetch = async function (this: Migratable, req: Request): Promise<Response> {
 		const m = this[STATE];
 		if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) return m.handle(req);
 		if (m.isMigrated()) return movedResponse();
@@ -85,8 +86,8 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	};
 
 	if (typeof base.alarm === "function") {
-		proto.alarm = async function (this: any, info: unknown) {
-			const m: MigratorState = this[STATE];
+		proto.alarm = async function (this: Migratable, info?: AlarmInvocationInfo) {
+			const m = this[STATE];
 			// The export already saved the alarm time for the new server.
 			if (m.isMigrated()) return;
 			return m.track(() => base.alarm.call(this, info));
@@ -95,16 +96,16 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 
 	for (const name of ["webSocketMessage", "webSocketClose", "webSocketError"]) {
 		if (typeof base[name] !== "function") continue;
-		proto[name] = function (this: any, ...args: unknown[]) {
-			const m: MigratorState = this[STATE];
+		proto[name] = function (this: Migratable, ...args: unknown[]) {
+			const m = this[STATE];
 			m.guard();
 			return m.track(() => base[name].apply(this, args));
 		};
 	}
 
 	for (const name of rpcMethodNames(Base)) {
-		proto[name] = function (this: any, ...args: unknown[]) {
-			const m: MigratorState = this[STATE];
+		proto[name] = function (this: Migratable, ...args: unknown[]) {
+			const m = this[STATE];
 			m.guard();
 			return m.track(() => base[name].apply(this, args));
 		};
@@ -203,10 +204,12 @@ export class MigratorState {
 		// Created the first time the migrator saves state, such as the object's name.
 		const exists = sql.exec(`SELECT 1 FROM sqlite_master WHERE name = ?`, STATE_TABLE).toArray().length > 0;
 		if (!exists) return;
-		for (const row of sql.exec(`SELECT key, value FROM "${STATE_TABLE}"`)) {
-			if (row.key === "state") this.#migrated = row.value === "migrated";
-			if (row.key === "name") this.#savedName = row.value as string;
-			if (row.key === "alarm") this.#savedAlarm = row.value as number;
+		for (const { key, value } of sql.exec<{ key: string; value: SqlStorageValue }>(
+			`SELECT key, value FROM "${STATE_TABLE}"`,
+		)) {
+			if (key === "state") this.#migrated = value === "migrated";
+			if (key === "name" && typeof value === "string") this.#savedName = value;
+			if (key === "alarm" && typeof value === "number") this.#savedAlarm = value;
 		}
 		if (this.#migrated && this.opts.disabled && this.#savedAlarm !== null) {
 			this.#restoreAlarm(sql, this.#savedAlarm);
@@ -216,7 +219,7 @@ export class MigratorState {
 	// Rollback: the export removed the alarm, so put it back. A time already in
 	// the past makes it run right away.
 	#restoreAlarm(sql: SqlStorage, at: number): void {
-		this.ctx.blockConcurrencyWhile(async () => {
+		void this.ctx.blockConcurrencyWhile(async () => {
 			if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(at);
 			sql.exec(`DELETE FROM "${STATE_TABLE}" WHERE key = 'alarm'`);
 			this.#savedAlarm = null;
@@ -576,10 +579,12 @@ function tailStatements(sql: SqlStorage, tables: TableInfo[], m: MigratorState, 
 
 	const hasSequence = [...sql.exec(`SELECT 1 FROM sqlite_master WHERE name = 'sqlite_sequence'`)].length > 0;
 	if (hasSequence) {
-		for (const [name, seq] of sql.exec(`SELECT name, quote(seq) FROM sqlite_sequence`).raw()) {
-			if (!exported.has(name as string)) continue;
-			out.push(`DELETE FROM sqlite_sequence WHERE name = ${sqlString(name as string)};`);
-			out.push(`INSERT INTO sqlite_sequence(name, seq) VALUES (${sqlString(name as string)}, ${seq});`);
+		for (const { name, seq } of sql.exec<{ name: string; seq: string }>(
+			`SELECT name, quote(seq) AS seq FROM sqlite_sequence`,
+		)) {
+			if (!exported.has(name)) continue;
+			out.push(`DELETE FROM sqlite_sequence WHERE name = ${sqlString(name)};`);
+			out.push(`INSERT INTO sqlite_sequence(name, seq) VALUES (${sqlString(name)}, ${seq});`);
 		}
 	}
 
@@ -621,8 +626,10 @@ function totalChanges(sql: SqlStorage): number {
 // `total_changes()` does not count schema changes, so the schema is compared too.
 function schemaFingerprint(sql: SqlStorage): number {
 	let hash = 0x811c9dc5;
-	for (const [name, text] of sql.exec(`SELECT name, sql FROM sqlite_master ORDER BY rowid`).raw()) {
-		if (!isUserObject(name as string)) continue;
+	for (const { name, text } of sql.exec<{ name: string; text: string | null }>(
+		`SELECT name, sql AS text FROM sqlite_master ORDER BY rowid`,
+	)) {
+		if (!isUserObject(name)) continue;
 		for (const ch of `${name}\u0000${text ?? ""}\u0000`) {
 			hash ^= ch.charCodeAt(0);
 			hash = Math.imul(hash, 0x01000193) >>> 0;
@@ -714,9 +721,11 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 function sqlLiteral(type: string, value: SqlStorageValue): string {
-	if (type === "text") return sqlString(value as string);
-	if (type === "blob") return `X'${hex(new Uint8Array(value as ArrayBuffer))}'`;
-	return value as string;
+	if (type === "text" && typeof value === "string") return sqlString(value);
+	if (type === "blob" && value instanceof ArrayBuffer) return `X'${hex(new Uint8Array(value))}'`;
+	// Other types arrive as quote() output.
+	if (type !== "text" && type !== "blob" && typeof value === "string") return value;
+	throw new MigratorError(500, "migrator.internal", `a ${type} value came back as ${typeof value}`);
 }
 
 function hex(bytes: Uint8Array): string {
