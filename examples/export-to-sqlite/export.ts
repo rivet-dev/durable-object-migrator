@@ -38,16 +38,11 @@ async function exportTo(id: string, path: string) {
 	await rm(partial, { force: true });
 	const db = new DatabaseSync(partial, { enableForeignKeyConstraints: false });
 	try {
-		try {
-			for await (const page of migrator.exportObject({ binding: binding!, id })) db.exec(page.sql);
-		} finally {
-			db.close();
-		}
-		await rename(partial, path);
-	} catch (err) {
-		await rm(partial, { force: true });
-		throw err;
+		for await (const page of migrator.exportObject({ binding: binding!, id })) db.exec(page.sql);
+	} finally {
+		db.close();
 	}
+	await rename(partial, path);
 }
 
 function required(key: string): string {

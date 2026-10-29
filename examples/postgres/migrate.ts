@@ -4,7 +4,7 @@
 //
 //   DATABASE_URL=postgres://... WORKER_URL=... WORKER_MIGRATOR_TOKEN=... \
 //   CF_API_TOKEN=... CF_ACCOUNT_ID=... CF_SCRIPT_NAME=my-app CF_CLASS_NAME=Room \
-//   node --experimental-transform-types migrate.ts backfill
+//   node --experimental-transform-types migrate.ts backfill [--from-start]
 
 import { mkdir, rename, rm } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -48,8 +48,8 @@ export async function beforeRequest(name: string): Promise<void> {
 	await migrate({ id });
 }
 
-/** Backfill: moves every Durable Object nobody touched. Safe to stop and rerun. */
-export async function backfill() {
+/** Backfill: moves every Durable Object nobody touched. Safe to stop and rerun. `fromStart` ignores the saved position. */
+export async function backfill({ fromStart = false } = {}) {
 	const saved = await pool.query("SELECT start_at FROM do_backfill WHERE binding = $1", [BINDING]);
 	return migrator.backfill({
 		cloudflare: {
@@ -58,7 +58,7 @@ export async function backfill() {
 			scriptName: required("CF_SCRIPT_NAME"),
 			className: required("CF_CLASS_NAME"),
 		},
-		startAt: saved.rows[0]?.start_at ?? null,
+		startAt: fromStart ? null : (saved.rows[0]?.start_at ?? null),
 		updateStartAt: async (startAt) => {
 			await pool.query(
 				`INSERT INTO do_backfill (binding, start_at) VALUES ($1, $2)
@@ -92,6 +92,6 @@ function required(key: string): string {
 }
 
 if (process.argv[2] === "backfill") {
-	console.log(await backfill());
+	console.log(await backfill({ fromStart: process.argv.includes("--from-start") }));
 	await pool.end();
 }
