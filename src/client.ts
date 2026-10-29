@@ -74,6 +74,8 @@ export type BackfillResult = {
 	failed: { id: string; error: unknown }[];
 };
 
+type ErrorBody = { error: { code: string; message: string } };
+
 export function createClient(opts: ClientOptions) {
 	const call = async <T>(binding: string, action: string, params: Record<string, string>, signal?: AbortSignal) => {
 		const url = new URL(`${ROUTE_PREFIX}${encodeURIComponent(binding)}/${action}`, opts.workerUrl);
@@ -87,9 +89,9 @@ export function createClient(opts: ClientOptions) {
 				res.status,
 			);
 		}
-		const body = (await res.json()) as T | { error: { code: string; message: string } };
+		const body = await res.json();
 		if (!res.ok) {
-			const { code, message } = (body as { error: { code: string; message: string } }).error;
+			const { code, message } = (body as ErrorBody).error;
 			if (code === "migrator.dirty") throw new MigrationDirtyError(message);
 			throw new MigratorError(code, message, res.status);
 		}
@@ -131,10 +133,7 @@ export function createClient(opts: ClientOptions) {
 			return call(binding, "resolve", "name" in target ? { name: target.name } : { id: target.id });
 		},
 
-		/** Lists every Durable Object with stored data and runs `migrate` on each one. */
-		backfill(opts: BackfillOptions): Promise<BackfillResult> {
-			return backfill(opts);
-		},
+		backfill,
 	};
 }
 
@@ -143,6 +142,7 @@ export function createClient(opts: ClientOptions) {
 
 type Position = { listCursor: string | null; index: number };
 
+/** Lists every Durable Object with stored data and runs `migrate` on each one. */
 async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 	const concurrency = opts.concurrency ?? 8;
 	const retries = opts.retries ?? 3;
@@ -180,10 +180,10 @@ async function backfill(opts: BackfillOptions): Promise<BackfillResult> {
 			async (i) => {
 				const id = page.ids[skip + i]!;
 				if (id === null) return;
-				const error = await withRetries(retries, opts.signal, () => opts.migrate({ id }));
-				if (error === undefined) {
+				try {
+					await withRetries(retries, opts.signal, () => opts.migrate({ id }));
 					result.done++;
-				} else {
+				} catch (error) {
 					failedOnce = true;
 					result.failed.push({ id, error });
 				}
@@ -231,35 +231,29 @@ async function pool(
 	await Promise.all(Array.from({ length: Math.min(concurrency, count) }, lane));
 }
 
-async function withRetries(
-	retries: number,
-	signal: AbortSignal | undefined,
-	fn: () => Promise<void>,
-): Promise<unknown> {
+async function withRetries(retries: number, signal: AbortSignal | undefined, fn: () => Promise<void>): Promise<void> {
 	for (let attempt = 0; ; attempt++) {
 		try {
-			await fn();
-			return undefined;
+			return await fn();
 		} catch (err) {
-			if (attempt >= retries || signal?.aborted) return err;
+			if (attempt >= retries || signal?.aborted) throw err;
 			await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
 		}
 	}
 }
 
-async function cloudflareGet<T>(
-	cf: BackfillOptions["cloudflare"],
-	path: string,
-): Promise<{ result: T; result_info?: any }> {
+type CloudflareBody<T> = {
+	success?: boolean;
+	result: T;
+	result_info?: { cursor?: string; total_pages?: number };
+	errors?: unknown;
+};
+
+async function cloudflareGet<T>(cf: BackfillOptions["cloudflare"], path: string): Promise<CloudflareBody<T>> {
 	const res = await fetch(`${cf.apiUrl ?? CLOUDFLARE_API}/accounts/${cf.accountId}${path}`, {
 		headers: { authorization: `Bearer ${cf.apiToken}` },
 	});
-	const body = (await res.json().catch(() => null)) as {
-		success?: boolean;
-		result: T;
-		result_info?: any;
-		errors?: unknown;
-	} | null;
+	const body = (await res.json().catch(() => null)) as CloudflareBody<T> | null;
 	if (!res.ok || !body?.success) {
 		throw new MigratorError(
 			"migrator.cloudflare_api",
