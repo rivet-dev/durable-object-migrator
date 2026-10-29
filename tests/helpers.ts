@@ -26,7 +26,7 @@ export async function startWorker() {
 			return url;
 		},
 		migrator: () => createClient({ workerUrl: url, token: TOKEN }),
-		app: (name: string, action: string, init?: RequestInit) => fetch(new URL(`/app/${name}/${action}`, url), init),
+		app: (name: string, action: string) => fetch(new URL(`/app/${name}/${action}`, url)),
 		/** Restarts the Durable Object. Storage is kept, in-memory state is lost. */
 		evict: (name: string) => server.getWorker().evictDurableObject("ROOMS", { name }),
 		/** Reloads the Worker with `MIGRATOR_DISABLED=true`. */

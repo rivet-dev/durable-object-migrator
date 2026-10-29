@@ -37,6 +37,7 @@ function destinationSnapshot(db: DatabaseSync) {
 
 const name = `${run}-fidelity`;
 let id = "";
+let seededAlarm: unknown = null;
 
 await check("seed a Durable Object with 4 rows of 1.5 MB blobs and hard cases", async () => {
 	const res = await app(name, "seed?big=1");
@@ -45,6 +46,7 @@ await check("seed a Durable Object with 4 rows of 1.5 MB blobs and hard cases", 
 
 await check("export it over several pages into an identical sqlite database", async () => {
 	const source = await (await app(name, "snapshot")).json();
+	seededAlarm = source.alarm;
 	id = (await migrator.resolve("ROOMS", { name })).id;
 	const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
 	let pages = 0;
@@ -70,8 +72,7 @@ await check("a migrated Durable Object exported again still reports its alarm", 
 	const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
 	for await (const page of migrator.exportObject({ binding: "ROOMS", id })) db.exec(page.sql);
 	const alarm = db.prepare(`SELECT value FROM __do_meta WHERE key = 'alarm'`).get() as { value: unknown };
-	// The fixture's seed schedules its alarm for 2099-01-01.
-	assert.equal(alarm.value, Date.UTC(2099, 0, 1));
+	assert.equal(alarm.value, seededAlarm);
 });
 
 await check("a KV write during the export makes it fail", async () => {

@@ -78,7 +78,8 @@ test("a backfill stopped halfway resumes from its saved position and moves every
 		updateStartAt: (value: string) => {
 			startAt = value;
 		},
-		concurrency: 2,
+		// One at a time, so the saved position is exactly after the objects that finished.
+		concurrency: 1,
 		signal,
 	});
 
@@ -94,9 +95,19 @@ test("a backfill stopped halfway resumes from its saved position and moves every
 	expect(done.size).toBeLessThan(NAMES.length);
 	expect(startAt).not.toBeNull();
 
-	const second = await migrator.backfill({ ...options(), migrate });
+	const finishedFirst = [...done];
+	const calledAgain: string[] = [];
+	const second = await migrator.backfill({
+		...options(),
+		migrate: async (target) => {
+			calledAgain.push(target.id);
+			await migrate(target);
+		},
+	});
 
 	expect(second.failed).toEqual([]);
+	// The resumed run starts after the saved position, so finished objects are not visited again.
+	for (const id of finishedFirst) expect(calledAgain).not.toContain(id);
 	expect(done.size).toBe(NAMES.length);
 	for (const { id, hasStoredData } of objects) {
 		if (!hasStoredData) continue;
@@ -105,27 +116,6 @@ test("a backfill stopped halfway resumes from its saved position and moves every
 	}
 	// Every migrated Durable Object now rejects app traffic on Cloudflare.
 	for (const name of NAMES) expect((await worker.app(name, "ping")).status).toBe(503);
-});
-
-test("a Durable Object that keeps failing is reported, and the rest still move", async () => {
-	const migrator = worker.migrator();
-	const broken = objects[0]!.id;
-	const moved: string[] = [];
-
-	const result = await migrator.backfill({
-		cloudflare: { apiToken: "cf-token", accountId: "acc", scriptName: "my-app", className: "Room", apiUrl },
-		startAt: null,
-		updateStartAt: () => {},
-		retries: 1,
-		migrate: async ({ id }) => {
-			if (id === broken) throw new Error("destination is down");
-			moved.push(id);
-		},
-	});
-
-	expect(result.failed.map((f) => f.id)).toEqual([broken]);
-	expect(result.done).toBe(NAMES.length - 1);
-	expect(moved).not.toContain(broken);
 });
 
 test("a wrong Cloudflare token fails with the API error", async () => {
@@ -138,7 +128,7 @@ test("a wrong Cloudflare token fails with the API error", async () => {
 	await expect(result).rejects.toMatchObject({ code: "migrator.cloudflare_api", status: 403 });
 });
 
-test("a Durable Object that failed is retried when the backfill resumes", async () => {
+test("a Durable Object that keeps failing is reported, the rest still move, and a resumed run retries it", async () => {
 	const migrator = worker.migrator();
 	const broken = objects[0]!.id;
 	const cloudflareOptions = { apiToken: "cf-token", accountId: "acc", scriptName: "my-app", className: "Room", apiUrl };
@@ -157,6 +147,7 @@ test("a Durable Object that failed is retried when the backfill resumes", async 
 		},
 	});
 	expect(first.failed.map((f) => f.id)).toEqual([broken]);
+	expect(first.done).toBe(NAMES.length - 1);
 
 	const retried: string[] = [];
 	await migrator.backfill({
