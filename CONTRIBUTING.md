@@ -37,4 +37,4 @@ node --experimental-transform-types tests/smoke/run.ts
 npx wrangler delete -c tests/fixture/wrangler.jsonc
 ```
 
-The list check waits for Cloudflare's list API, which shows new objects only after a few minutes.
+The list check waits up to 10 minutes for Cloudflare's list API, which shows new objects after a delay that changes from run to run.

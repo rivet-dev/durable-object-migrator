@@ -50,5 +50,5 @@ Cloudflare data stays in place for the whole migration. Leave its deletion to th
 ## Facts users ask about
 
 - Every finished export marks the Durable Object migrated, and it then rejects app traffic. A "download a copy" request moves the object; tell the user before running it.
-- Cloudflare's list API shows new objects only after a few minutes, so backfill runs after cutover.
+- Cloudflare's list API shows new objects only after a delay, usually a few minutes. It is not documented and changes from run to run, so backfill runs a few minutes after cutover and again from the start.
 - Objects the migrator never saw by name come back from backfill with `name: null`. Rivet keys them `cloudflare:<id>`.
