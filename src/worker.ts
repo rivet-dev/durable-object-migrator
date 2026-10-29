@@ -54,10 +54,11 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	const base = Base.prototype as Record<string, any>;
 
 	class Migratable extends Base {
+		readonly [STATE]: MigratorState;
 		constructor(...args: any[]) {
 			super(...args);
 			const [ctx, env] = args as [DurableObjectState, Env];
-			(this as any)[STATE] = new MigratorState(ctx, {
+			this[STATE] = new MigratorState(ctx, {
 				token: env[TOKEN_ENV] as string | undefined,
 				disabled: env[DISABLED_ENV] === "true",
 			});
@@ -65,8 +66,8 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	}
 	const proto = Migratable.prototype as Record<string, any>;
 
-	proto.fetch = async function (this: any, req: Request): Promise<Response> {
-		const m: MigratorState = this[STATE];
+	proto.fetch = async function (this: Migratable, req: Request): Promise<Response> {
+		const m = this[STATE];
 		if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) return m.handle(req);
 		if (m.isMigrated()) return movedResponse();
 		if (typeof base.fetch !== "function") {
@@ -76,26 +77,20 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 	};
 
 	if (typeof base.alarm === "function") {
-		proto.alarm = async function (this: any, info: unknown) {
-			const m: MigratorState = this[STATE];
+		proto.alarm = async function (this: Migratable, info: unknown) {
+			const m = this[STATE];
 			// The export already saved the alarm time for the new server.
 			if (m.isMigrated()) return;
 			return m.track(() => base.alarm.call(this, info));
 		};
 	}
 
-	for (const name of ["webSocketMessage", "webSocketClose", "webSocketError"]) {
-		if (typeof base[name] !== "function") continue;
-		proto[name] = function (this: any, ...args: unknown[]) {
-			const m: MigratorState = this[STATE];
-			m.guard();
-			return m.track(() => base[name].apply(this, args));
-		};
-	}
-
-	for (const name of rpcMethodNames(Base)) {
-		proto[name] = function (this: any, ...args: unknown[]) {
-			const m: MigratorState = this[STATE];
+	const webSocketHandlers = ["webSocketMessage", "webSocketClose", "webSocketError"].filter(
+		(name) => typeof base[name] === "function",
+	);
+	for (const name of [...webSocketHandlers, ...rpcMethodNames(Base)]) {
+		proto[name] = function (this: Migratable, ...args: unknown[]) {
+			const m = this[STATE];
 			m.guard();
 			return m.track(() => base[name].apply(this, args));
 		};
