@@ -56,36 +56,45 @@ const MigratorConfig = Config.all({
 
 const moved = () => new MigrationMovedError({ message: "this Durable Object was migrated to a new server" });
 
-/** Counts `effect` as in flight until it ends, so an export cannot finish while it may still write. */
-const counted = <A, E, R>(m: MigratorState, effect: Effect.Effect<A, E, R>) =>
+// Fails once the object moved. Otherwise counts one call as in flight.
+const admit = (m: MigratorState) =>
+	Effect.gen(function* () {
+		if (m.isMigrated()) return yield* moved();
+		m.begin();
+	});
+
+const release = (m: MigratorState) => Effect.sync(() => m.end());
+
+// Each call stays in flight until it ends, so an export cannot finish while it
+// may still write. `acquireUseRelease` releases on interrupt without closing
+// the caller's Scope, which Alchemy keeps open per call.
+const counted = <A, E, R>(m: MigratorState, self: Effect.Effect<A, E, R>) =>
 	Effect.acquireUseRelease(
 		Effect.sync(() => m.begin()),
-		() => effect,
-		() => Effect.sync(() => m.end()),
+		() => self,
+		() => release(m),
 	);
 
-const guarded = <A, E, R>(m: MigratorState, effect: Effect.Effect<A, E, R>) =>
-	Effect.suspend(
-		(): Effect.Effect<A, E | MigrationMovedError, R> => (m.isMigrated() ? Effect.fail(moved()) : counted(m, effect)),
+const guarded = <A, E, R>(m: MigratorState, self: Effect.Effect<A, E, R>) =>
+	Effect.acquireUseRelease(
+		admit(m),
+		() => self,
+		() => release(m),
 	);
 
-const guardedStream = <A, E, R>(m: MigratorState, stream: Stream.Stream<A, E, R>) =>
-	Stream.unwrap(
-		Effect.suspend(
-			(): Effect.Effect<Stream.Stream<A, E, R>, MigrationMovedError> =>
-				m.isMigrated()
-					? Effect.fail(moved())
-					: Effect.sync(() => {
-							m.begin();
-							return stream.pipe(Stream.ensuring(Effect.sync(() => m.end())));
-						}),
-		),
-	);
+// `Stream.unwrap` runs `admit` on the first pull and releases when the stream
+// ends, so a stream that is never consumed is never counted.
+const guardedStream = <A, E, R>(m: MigratorState, self: Stream.Stream<A, E, R>) =>
+	Stream.unwrap(Effect.acquireRelease(admit(m), () => release(m)).pipe(Effect.as(self)));
 
 // The export closes every hibernated WebSocket, so an event that still
 // arrives is an error, as it is for a plain class.
-const guardedHandler = <E, R>(m: MigratorState, effect: Effect.Effect<void, E, R>) =>
-	Effect.suspend(() => (m.isMigrated() ? Effect.die(moved()) : counted(m, effect)));
+const guardedHandler = <E, R>(m: MigratorState, self: Effect.Effect<void, E, R>) =>
+	Effect.acquireUseRelease(
+		Effect.orDie(admit(m)),
+		() => self,
+		() => release(m),
+	);
 
 // Alchemy builds every request from a web Request, so this gives it back unchanged.
 const webRequest = HttpServerRequest.HttpServerRequest.pipe(Effect.flatMap(HttpServerRequest.toWeb), Effect.orDie);
@@ -113,7 +122,10 @@ function guardShape<S extends Shape>(shape: S, m: MigratorState): Migratable<S> 
 		// The export already saved the alarm time for the new server.
 		...(alarm && {
 			alarm: (info?: Cloudflare.AlarmInvocationInfo) =>
-				Effect.suspend(() => (m.isMigrated() ? Effect.void : counted(m, alarm(info)))),
+				Effect.gen(function* () {
+					if (m.isMigrated()) return;
+					return yield* counted(m, alarm(info));
+				}),
 		}),
 		...(webSocketMessage && {
 			webSocketMessage: (ws, message) => guardedHandler(m, webSocketMessage(ws, message)),
