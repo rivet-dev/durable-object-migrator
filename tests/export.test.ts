@@ -26,6 +26,14 @@ async function exportInto(name: string) {
 	return { db, pages, id };
 }
 
+/** One export page over plain HTTP, for requests the client would never send. */
+function exportRequest(id: string, cursor?: string) {
+	const url = new URL("/__migrate/ROOMS/export", worker.url);
+	url.searchParams.set("id", id);
+	if (cursor !== undefined) url.searchParams.set("cursor", cursor);
+	return fetch(url, { headers: { authorization: `Bearer ${TOKEN}` } });
+}
+
 describe("export", () => {
 	test("a Durable Object full of hard cases arrives with identical data", async () => {
 		await seed(worker, "fidelity", { big: true });
@@ -80,23 +88,39 @@ describe("export", () => {
 		// Pages are fetched by hand so no request to the object is in flight
 		// during eviction. exportObject always prefetches the next page, and
 		// workerd's test eviction waits for every request to drain.
-		const page = (cursor?: string) => {
-			const url = new URL("/__migrate/ROOMS/export", worker.url);
-			url.searchParams.set("id", id);
-			if (cursor) url.searchParams.set("cursor", cursor);
-			return fetch(url, { headers: { authorization: `Bearer ${TOKEN}` } });
-		};
-		const first = (await (await page()).json()) as { cursor: string };
+		const first = (await (await exportRequest(id)).json()) as { cursor: string };
 
 		// A restart resets the write counter, so the export cannot prove nothing was written.
 		await worker.evict("evicted");
 
-		const second = await page(first.cursor);
+		const second = await exportRequest(id, first.cursor);
 		expect(second.status).toBe(409);
 		expect(await second.json()).toMatchObject({ error: { code: "migrator.dirty" } });
 
 		const { db } = await exportInto("evicted");
 		expect(db.prepare(`SELECT count(*) AS n FROM notes`).get()).toEqual({ n: 3 });
+	});
+});
+
+describe("bad requests", () => {
+	test("a malformed cursor or one with an unknown phase gets 400 instead of a crash or an endless export", async () => {
+		await seed(worker, "bad-cursor", { big: true });
+		const { id } = await worker.migrator().resolve("ROOMS", { name: "bad-cursor" });
+		const { cursor } = (await (await exportRequest(id)).json()) as { cursor: string };
+
+		for (const bad of ["null", JSON.stringify({ ...JSON.parse(cursor), phase: "done" })]) {
+			const res = await exportRequest(id, bad);
+			expect(res.status).toBe(400);
+			expect(await res.json()).toMatchObject({ error: { code: "migrator.bad_request" } });
+		}
+	});
+
+	test("a binding whose class is not wrapped with migratable fails with the real error", async () => {
+		const migrator = worker.migrator();
+		const { id } = await migrator.resolve("PLAIN", { name: "plain" });
+
+		const pages = migrator.exportObject({ binding: "PLAIN", id });
+		await expect(pages.next()).rejects.toMatchObject({ code: "migrator.internal", status: 502 });
 	});
 });
 

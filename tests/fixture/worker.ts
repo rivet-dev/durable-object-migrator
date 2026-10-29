@@ -3,10 +3,12 @@ import { stringify } from "devalue";
 import { migratable, migrationRoute } from "../../src/worker";
 import { snapshot } from "./snapshot";
 
-type Env = {
+// An interface, as `wrangler types` generates.
+interface Env {
 	ROOMS: DurableObjectNamespace<RoomImpl>;
+	PLAIN: DurableObjectNamespace;
 	WORKER_MIGRATOR_TOKEN: string;
-};
+}
 
 const ALARM_AT = Date.UTC(2099, 0, 1);
 
@@ -121,6 +123,9 @@ class RoomImpl extends DurableObject<Env> {
 }
 
 export const Room = migratable(RoomImpl);
+
+// Not wrapped with migratable and has no fetch, as when a user forgets to wrap a class.
+export class Plain extends DurableObject<Env> {}
 
 export default {
 	async fetch(req: Request, env: Env): Promise<Response> {

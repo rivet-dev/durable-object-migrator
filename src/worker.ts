@@ -37,8 +37,18 @@ const HANDLER_NAMES = new Set([
 	"webSocketError",
 ]);
 
-type Env = Record<string, unknown>;
+// Any env object, including the `interface Env` that `wrangler types` emits.
+type Env = object;
 type DurableObjectClass = new (...args: any[]) => object;
+
+function envString(env: Env, key: string): string | undefined {
+	const value: unknown = Reflect.get(env, key);
+	return typeof value === "string" ? value : undefined;
+}
+
+function isNamespace(value: unknown): value is DurableObjectNamespace {
+	return typeof value === "object" && value !== null && "idFromName" in value && typeof value.idFromName === "function";
+}
 
 const STATE = Symbol("durable-object-migrator");
 
@@ -57,15 +67,15 @@ export function migratable<T extends DurableObjectClass>(Base: T): T {
 			super(...args);
 			const [ctx, env] = args as [DurableObjectState, Env];
 			(this as any)[STATE] = new MigratorState(ctx, {
-				token: env[TOKEN_ENV] as string | undefined,
-				disabled: env[DISABLED_ENV] === "true",
+				token: envString(env, TOKEN_ENV),
+				disabled: envString(env, DISABLED_ENV) === "true",
 			});
 		}
 	}
 	const proto = Migratable.prototype as Record<string, any>;
 
 	proto.fetch = async function (this: any, req: Request): Promise<Response> {
-		const m: MigratorState = this[STATE];
+		const m = this[STATE];
 		if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) return m.handle(req);
 		if (m.isMigrated()) return movedResponse();
 		if (typeof base.fetch !== "function") {
@@ -122,8 +132,8 @@ async function routeToObject(req: Request, url: URL, env: Env, token: string | u
 	}
 
 	const [binding, action] = url.pathname.slice(ROUTE_PREFIX.length).split("/");
-	const ns = env[binding ?? ""] as DurableObjectNamespace | undefined;
-	if (!ns || typeof ns.idFromName !== "function") {
+	const ns: unknown = binding ? Reflect.get(env, binding) : undefined;
+	if (!isNamespace(ns)) {
 		return errorResponse(404, "migrator.unknown_binding", `no Durable Object binding named "${binding}"`);
 	}
 
@@ -141,7 +151,13 @@ async function routeToObject(req: Request, url: URL, env: Env, token: string | u
 	} catch {
 		return errorResponse(400, "migrator.bad_request", `"${idParam}" is not a Durable Object id for this binding`);
 	}
-	return ns.get(id).fetch(req);
+	try {
+		return await ns.get(id).fetch(req);
+	} catch (err) {
+		// Without the migrator header, the client would blame the workerUrl.
+		const message = err instanceof Error ? err.message : String(err);
+		return errorResponse(502, "migrator.internal", `the Durable Object failed to answer: ${message}`);
+	}
 }
 
 /** What `migratable` needs from the Worker's env. Adapters pass their own values. */
@@ -336,14 +352,23 @@ export class MigratorState {
 // =======================================================================================
 
 type Cursor = {
-	instanceId: string;
-	startChanges: number;
-	schema: number;
-	phase: "rows" | "kv" | "tail";
-	table: number;
-	// rows: quote() literals of the last key. kv: the last key.
-	after: string[] | string | null;
-};
+	readonly instanceId: string;
+	readonly startChanges: number;
+	readonly schema: number;
+} & (
+	| {
+			readonly phase: "rows";
+			readonly table: number;
+			/** The quote() literals of the last row key. */
+			readonly after: readonly string[] | null;
+	  }
+	| {
+			readonly phase: "kv";
+			/** The last KV key. */
+			readonly after: string | null;
+	  }
+	| { readonly phase: "tail" }
+);
 
 type TableInfo = {
 	name: string;
@@ -396,16 +421,16 @@ async function exportPage(
 	while (cursor.phase === "rows" && bytes < PAGE_BYTES) {
 		const table = tables[cursor.table];
 		if (!table) {
-			cursor = { ...cursor, phase: "kv", table: 0, after: null };
+			cursor = { ...cursor, phase: "kv", after: null };
 			break;
 		}
-		const { statements, lastKey, done } = readRows(sql, table, cursor.after as string[] | null, PAGE_BYTES - bytes);
+		const { statements, lastKey, done } = readRows(sql, table, cursor.after, PAGE_BYTES - bytes);
 		for (const s of statements) push(s);
 		cursor = done ? { ...cursor, table: cursor.table + 1, after: null } : { ...cursor, after: lastKey };
 	}
 
 	while (cursor.phase === "kv" && bytes < PAGE_BYTES) {
-		const after = cursor.after as string | null;
+		const after = cursor.after;
 		const entries = await m.ctx.storage.list(
 			after === null ? { limit: KV_PER_LIST } : { startAfter: after, limit: KV_PER_LIST },
 		);
@@ -416,7 +441,7 @@ async function exportPage(
 			);
 			last = key;
 		}
-		cursor = entries.size < KV_PER_LIST ? { ...cursor, phase: "tail", after: null } : { ...cursor, after: last };
+		cursor = entries.size < KV_PER_LIST ? { ...cursor, phase: "tail" } : { ...cursor, after: last };
 	}
 
 	if (cursor.phase !== "tail" || bytes >= PAGE_BYTES) {
@@ -480,9 +505,9 @@ function listTables(sql: SqlStorage): TableInfo[] {
 function readRows(
 	sql: SqlStorage,
 	table: TableInfo,
-	after: string[] | null,
+	after: readonly string[] | null,
 	budget: number,
-): { statements: string[]; lastKey: string[] | null; done: boolean } {
+): { statements: string[]; lastKey: readonly string[] | null; done: boolean } {
 	const info = sql
 		.exec<{ name: string; type: string; pk: number; hidden: number }>(`PRAGMA table_xinfo(${ident(table.name)})`)
 		.toArray();
@@ -644,11 +669,44 @@ function encodeCursor(cursor: Cursor): string {
 }
 
 function decodeCursor(value: string): Cursor {
-	try {
-		return JSON.parse(value) as Cursor;
-	} catch {
-		throw new MigratorError(400, "migrator.bad_request", "invalid export cursor");
+	const c = parseJson(value);
+	if (
+		isRecord(c) &&
+		typeof c.instanceId === "string" &&
+		typeof c.startChanges === "number" &&
+		typeof c.schema === "number"
+	) {
+		const head = { instanceId: c.instanceId, startChanges: c.startChanges, schema: c.schema };
+		const { phase, table, after } = c;
+		if (phase === "tail") return { ...head, phase };
+		if (phase === "kv" && (after === null || typeof after === "string")) return { ...head, phase, after };
+		if (
+			phase === "rows" &&
+			typeof table === "number" &&
+			Number.isSafeInteger(table) &&
+			table >= 0 &&
+			(after === null || isStringArray(after))
+		) {
+			return { ...head, phase, table, after };
+		}
 	}
+	throw new MigratorError(400, "migrator.bad_request", "invalid export cursor");
+}
+
+function parseJson(value: string): unknown {
+	try {
+		return JSON.parse(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
 
 function sqlLiteral(type: string, value: SqlStorageValue): string {
