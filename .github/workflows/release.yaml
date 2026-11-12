@@ -1,0 +1,73 @@
+name: release
+
+# Publishes the version in package.json to npm and tags v<version>.
+#
+#   gh workflow run release.yaml --repo rivet-dev/durable-object-migrator -f version=1.0.1
+#
+# npm authenticates with GitHub's OIDC token (npm trusted publishing). Set this
+# repository and `release.yaml` as the package's trusted publisher on npmjs.com.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version (must match package.json)
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -e {0}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    permissions:
+      # Push the v<version> tag.
+      contents: write
+      # Exchange GitHub's OIDC token for npm trusted publishing.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@^11.5.1
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check the version
+        run: |
+          actual=$(node -p 'require("./package.json").version')
+          if [ "$actual" != "${{ inputs.version }}" ]; then
+            echo "::error::package.json is at $actual, not ${{ inputs.version }}"
+            exit 1
+          fi
+
+      - run: pnpm run ci
+
+      # npm, not pnpm: npm publishes with the OIDC token. `prepack` builds dist/.
+      - name: Publish
+        run: |
+          name=$(node -p 'require("./package.json").name')
+          if [ "$(npm view "$name@${{ inputs.version }}" version 2>/dev/null)" = "${{ inputs.version }}" ]; then
+            echo "$name@${{ inputs.version }} is already on npm"
+          else
+            npm publish --access public
+          fi
+
+      - name: Tag
+        run: |
+          git tag "v${{ inputs.version }}"
+          git push origin "v${{ inputs.version }}"
