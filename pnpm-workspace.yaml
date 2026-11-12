@@ -4,6 +4,7 @@ packages:
 allowBuilds:
   "@biomejs/biome": true
   cbor-extract: true
+  core-js-pure: false
   esbuild: true
   workerd: true
 

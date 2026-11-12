@@ -4,9 +4,19 @@
 	"name": "durable-object-migrator-smoke",
 	"main": "./worker.ts",
 	"compatibility_date": "2026-07-01",
+	// The Agents SDK needs Node.js APIs.
+	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": true,
 	"durable_objects": {
-		"bindings": [{ "name": "ROOMS", "class_name": "Room" }, { "name": "KV_ROOMS", "class_name": "KvRoom" }]
+		"bindings": [
+			{ "name": "ROOMS", "class_name": "Room" },
+			{ "name": "KV_ROOMS", "class_name": "KvRoom" },
+			{ "name": "COUNTERS", "class_name": "Counter" }
+		]
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }, { "tag": "v2", "new_classes": ["KvRoom"] }]
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["Room"] },
+		{ "tag": "v2", "new_classes": ["KvRoom"] },
+		{ "tag": "v3", "new_sqlite_classes": ["Counter"] }
+	]
 }
