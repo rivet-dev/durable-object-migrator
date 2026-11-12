@@ -57,15 +57,25 @@ jobs:
 
       - run: pnpm run ci
 
-      # npm, not pnpm: npm publishes with the OIDC token. `prepack` builds dist/.
+      # `pnpm pack` applies `publishConfig` (the dist/ exports) and runs `prepack`.
+      # npm ignores `publishConfig.exports`, so npm publishes that tarball as is,
+      # with the OIDC token.
       - name: Publish
         run: |
           name=$(node -p 'require("./package.json").name')
           if [ "$(npm view "$name@${{ inputs.version }}" version 2>/dev/null)" = "${{ inputs.version }}" ]; then
             echo "$name@${{ inputs.version }} is already on npm"
-          else
-            npm publish --access public
+            exit 0
           fi
+          pnpm pack --pack-destination "$RUNNER_TEMP"
+          tarball=$(ls "$RUNNER_TEMP"/*.tgz)
+          tar -xOzf "$tarball" package/package.json | node -e '
+            const pkg = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            if (JSON.stringify(pkg.exports).includes("./src/")) {
+              console.error("::error::the packed exports point at src/, not dist/");
+              process.exit(1);
+            }'
+          npm publish "$tarball" --access public
 
       - name: Tag
         run: |

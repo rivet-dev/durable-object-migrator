@@ -1,6 +1,6 @@
 {
 	"name": "@rivet-dev/durable-object-migrator",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "Move Cloudflare Durable Objects to your own server with no downtime and no lost writes.",
 	"type": "module",
 	"license": "MIT",
