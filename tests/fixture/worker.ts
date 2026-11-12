@@ -1,10 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
+import { Agent } from "agents";
 import { stringify } from "devalue";
 import { migratable, migrationRoute } from "../../src/worker";
 import { snapshot } from "./snapshot";
 
 interface Env {
 	ROOMS: DurableObjectNamespace<RoomImpl>;
+	COUNTERS: DurableObjectNamespace<CounterImpl>;
 	WORKER_MIGRATOR_TOKEN: string;
 }
 
@@ -124,6 +126,23 @@ export const Room = migratable(RoomImpl);
 
 export const KvRoom = migratable(class extends DurableObject<Env> {});
 
+// An Agents SDK class. The SDK runs SQL in its constructor, needs `this.sql`
+// and `setState` to stay synchronous, and checks which hooks the app overrides.
+class CounterImpl extends Agent<Env, { n: number }> {
+	initialState = { n: 0 };
+
+	async onRequest(): Promise<Response> {
+		this.setState({ n: this.state.n + 1 });
+		return Response.json(this.state);
+	}
+
+	count(): number {
+		return this.state.n;
+	}
+}
+
+export const Counter = migratable(CounterImpl);
+
 export default {
 	async fetch(req: Request, env: Env): Promise<Response> {
 		const migration = migrationRoute(req, env, { token: env.WORKER_MIGRATOR_TOKEN });
@@ -131,6 +150,17 @@ export default {
 
 		// /app/:name/:action
 		const [, app, name, action, ...rest] = new URL(req.url).pathname.split("/");
+		if (app === "counter" && name) {
+			const counter = env.COUNTERS.get(env.COUNTERS.idFromName(name));
+			if (action === "rpc-count") {
+				try {
+					return Response.json(await counter.count());
+				} catch (err) {
+					return new Response(String(err), { status: 500 });
+				}
+			}
+			return counter.fetch(new Request(new URL("/", req.url)));
+		}
 		if (app !== "app" || !name || !action) return new Response("not found", { status: 404 });
 		const stub = env.ROOMS.get(env.ROOMS.idFromName(name));
 

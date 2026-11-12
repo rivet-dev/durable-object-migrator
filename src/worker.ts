@@ -44,8 +44,6 @@ const HANDLER_NAMES = new Set([
 type Env = Record<string, any>;
 type DurableObjectClass = new (...args: any[]) => object;
 
-const STATE = Symbol("durable-object-migrator");
-
 /**
  * Wraps a Durable Object class so it can export itself.
  *
@@ -54,52 +52,64 @@ const STATE = Symbol("durable-object-migrator");
  * with `migrator.moved`, so a late write cannot land on the old copy.
  */
 export function migratable<T extends DurableObjectClass>(Base: T): T {
-	const base = Base.prototype as Record<string, any>;
+	const guarded = new Set(["webSocketMessage", "webSocketClose", "webSocketError", ...rpcMethodNames(Base)]);
 
-	class Migratable extends Base {
-		readonly [STATE]: MigratorState;
-		constructor(...args: any[]) {
-			super(...args);
+	// The class is not changed. Frameworks such as the Agents SDK call their own
+	// methods from the constructor, expect some of them to stay synchronous, and
+	// inspect the prototype to see which hooks the app overrides. So only calls
+	// from outside go through the guard: the runtime and RPC callers get a Proxy
+	// of the instance, and each guarded method runs on the real instance, so the
+	// object's calls to itself are untouched.
+	return new Proxy(Base, {
+		construct(target, args, newTarget) {
+			const self = Reflect.construct(target, args, newTarget) as Record<PropertyKey, any>;
 			const [ctx, env] = args as [DurableObjectState, Env];
-			this[STATE] = new MigratorState(ctx, {
+			const m = new MigratorState(ctx, {
 				token: env[TOKEN_ENV] as string | undefined,
 				disabled: env[DISABLED_ENV] === "true",
 			});
-		}
+			const entries = new Map<string, (...args: any[]) => unknown>();
+			return new Proxy(self, {
+				get(target, prop, receiver) {
+					const value = Reflect.get(target, prop, receiver);
+					if (typeof prop !== "string") return value;
+					// fetch always exists, because the export route needs it.
+					if (prop !== "fetch" && (typeof value !== "function" || (prop !== "alarm" && !guarded.has(prop)))) {
+						return value;
+					}
+					let entry = entries.get(prop);
+					if (!entry) {
+						entry = entryPoint(m, self, prop);
+						entries.set(prop, entry);
+					}
+					return entry;
+				},
+			});
+		},
+	});
+}
+
+// The guarded version of one method the runtime or an RPC caller invokes.
+function entryPoint(m: MigratorState, self: Record<PropertyKey, any>, name: string): (...args: any[]) => unknown {
+	if (name === "fetch") {
+		return async (req: Request) => {
+			if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) return m.handle(req);
+			if (m.isMigrated()) return movedResponse();
+			if (typeof self.fetch !== "function") throw new Error("this Durable Object does not implement fetch()");
+			return m.run(() => self.fetch(req));
+		};
 	}
-	const proto = Migratable.prototype as Record<string, any>;
-
-	proto.fetch = async function (this: Migratable, req: Request): Promise<Response> {
-		const m = this[STATE];
-		if (new URL(req.url).pathname.startsWith(ROUTE_PREFIX)) return m.handle(req);
-		if (m.isMigrated()) return movedResponse();
-		if (typeof base.fetch !== "function") {
-			throw new Error("this Durable Object does not implement fetch()");
-		}
-		return m.track(() => base.fetch.call(this, req));
-	};
-
-	if (typeof base.alarm === "function") {
-		proto.alarm = async function (this: Migratable, info: unknown) {
-			const m = this[STATE];
+	if (name === "alarm") {
+		return async (info: unknown) => {
 			// The export already saved the alarm time for the new server.
 			if (m.isMigrated()) return;
-			return m.track(() => base.alarm.call(this, info));
+			return m.run(() => self.alarm(info));
 		};
 	}
-
-	const webSocketHandlers = ["webSocketMessage", "webSocketClose", "webSocketError"].filter(
-		(name) => typeof base[name] === "function",
-	);
-	for (const name of [...webSocketHandlers, ...rpcMethodNames(Base)]) {
-		proto[name] = function (this: Migratable, ...args: unknown[]) {
-			const m = this[STATE];
-			m.guard();
-			return m.track(() => base[name].apply(this, args));
-		};
-	}
-
-	return Migratable;
+	return (...args: unknown[]) => {
+		m.guard();
+		return m.run(() => self[name](...args));
+	};
 }
 
 /**
@@ -246,14 +256,26 @@ export class MigratorState {
 		return this.#inFlight;
 	}
 
-	/** Runs an app handler and counts it as in flight until it settles. */
-	async track<R>(fn: () => R | Promise<R>): Promise<R> {
+	/**
+	 * Runs an app handler and counts it as in flight until it settles. A
+	 * synchronous handler stays synchronous: its result is returned as is.
+	 */
+	run<R>(fn: () => R): R {
 		this.begin();
+		let result: R;
 		try {
-			return await fn();
-		} finally {
+			result = fn();
+		} catch (err) {
+			this.end();
+			throw err;
+		}
+		if (result !== null && typeof (result as { then?: unknown } | undefined)?.then === "function") {
+			const end = () => this.end();
+			(result as PromiseLike<unknown>).then(end, end);
+		} else {
 			this.end();
 		}
+		return result;
 	}
 
 	/** The alarm time saved when the object was marked migrated, until a rollback restores it. */
