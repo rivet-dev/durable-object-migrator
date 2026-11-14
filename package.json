@@ -50,11 +50,12 @@
 	"scripts": {
 		"build": "rm -rf dist && tsc -p tsconfig.build.json",
 		"test": "vitest run",
-		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p tests/smoke && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
+		"check-types": "tsc --noEmit -p . && tsc --noEmit -p tests && tsc --noEmit -p scripts && tsc --noEmit -p tests/smoke && tsc --noEmit -p tests/alchemy-fixture && tsc --noEmit -p examples && tsc --noEmit -p examples/alchemy",
 		"lint": "biome lint .",
 		"format:check": "biome format .",
 		"ci": "pnpm lint && pnpm format:check && pnpm check-types && pnpm test",
-		"prepack": "pnpm build"
+		"prepack": "pnpm build",
+		"release": "tsx scripts/release/main.ts"
 	},
 	"dependencies": {
 		"devalue": "^5.9.4"
@@ -84,6 +85,7 @@
 		"agents": "0.33.0",
 		"alchemy": "2.0.0-beta.84",
 		"effect": "4.0.6",
+		"tsx": "4.20.5",
 		"typescript": "^5.9.3",
 		"vitest": "^5.0.5",
 		"wrangler": "^4.153.0"

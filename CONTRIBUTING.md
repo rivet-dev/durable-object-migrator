@@ -43,9 +43,10 @@ The list check waits up to 10 minutes for Cloudflare's list API, which shows new
 
 The package is `@rivet-dev/durable-object-migrator`. In the repo, its exports point at `src/` so the examples and tests run without a build. On publish, `publishConfig.exports` points them at the compiled `dist/`.
 
+Release from an up-to-date `main` with no uncommitted changes:
+
 ```sh
-pnpm run ci
-pnpm version <patch|minor|major>
-pnpm pack            # builds dist/ and writes the tarball; check its contents
-pnpm publish
+pnpm release --patch          # or --minor, --major, or --version 1.2.3
 ```
+
+It asks you to confirm, bumps `package.json`, runs `pnpm run ci`, commits `chore(release): update version to <version>`, pushes it, and starts `.github/workflows/release.yaml`. The workflow runs the checks again, publishes the `pnpm pack` tarball to npm with trusted publishing, pushes the `v<version>` tag, and creates the GitHub release. Pass `--no-latest` to publish a version that is not tagged `latest` on npm. A version with `-rc.` goes to the `rc` tag, and any other prerelease to `next`.

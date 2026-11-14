@@ -1,18 +1,22 @@
 name: release
 
-# Publishes the version in package.json to npm and tags v<version>.
+# Started by `pnpm release` (scripts/release/main.ts, phase setup-local) after it commits the
+# version bump. Publishes to npm, tags v<version>, and creates the GitHub release.
 #
-#   gh workflow run release.yaml --repo rivet-dev/durable-object-migrator -f version=1.0.1
-#
-# npm authenticates with GitHub's OIDC token (npm trusted publishing). Set this
-# repository and `release.yaml` as the package's trusted publisher on npmjs.com.
+# npm authenticates with GitHub's OIDC token (npm trusted publishing). Set this repository and
+# `release.yaml` as the package's trusted publisher on npmjs.com.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version (must match package.json)
+        description: Version
         required: true
         type: string
+      latest:
+        description: Tag as latest on npm
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
   group: release
@@ -27,12 +31,14 @@ jobs:
     name: Release
     runs-on: ubuntu-24.04
     permissions:
-      # Push the v<version> tag.
+      # Push the v<version> tag and create the GitHub release.
       contents: write
       # Exchange GitHub's OIDC token for npm trusted publishing.
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
 
@@ -47,37 +53,15 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Check the version
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          actual=$(node -p 'require("./package.json").version')
-          if [ "$actual" != "${{ inputs.version }}" ]; then
-            echo "::error::package.json is at $actual, not ${{ inputs.version }}"
-            exit 1
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          args=(--version "${{ inputs.version }}" --phase complete-ci --no-validate-git)
+          if [ "${{ inputs.latest }}" != "true" ]; then
+            args+=(--no-latest)
           fi
-
-      - run: pnpm run ci
-
-      # `pnpm pack` applies `publishConfig` (the dist/ exports) and runs `prepack`.
-      # npm ignores `publishConfig.exports`, so npm publishes that tarball as is,
-      # with the OIDC token.
-      - name: Publish
-        run: |
-          name=$(node -p 'require("./package.json").name')
-          if [ "$(npm view "$name@${{ inputs.version }}" version 2>/dev/null)" = "${{ inputs.version }}" ]; then
-            echo "$name@${{ inputs.version }} is already on npm"
-            exit 0
-          fi
-          pnpm pack --pack-destination "$RUNNER_TEMP"
-          tarball=$(ls "$RUNNER_TEMP"/*.tgz)
-          tar -xOzf "$tarball" package/package.json | node -e '
-            const pkg = JSON.parse(require("fs").readFileSync(0, "utf8"));
-            if (JSON.stringify(pkg.exports).includes("./src/")) {
-              console.error("::error::the packed exports point at src/, not dist/");
-              process.exit(1);
-            }'
-          npm publish "$tarball" --access public
-
-      - name: Tag
-        run: |
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          pnpm release "${args[@]}"
