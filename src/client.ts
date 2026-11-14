@@ -105,13 +105,25 @@ export function createClient(opts: ClientOptions) {
 		 * on Cloudflare rejects app traffic.
 		 *
 		 * Throws `MigrationDirtyError` if the object was written to during the export.
+		 *
+		 * A page request that the migrator never answered, because the connection
+		 * dropped or a proxy in front of the Worker failed, is sent again with the same
+		 * cursor. The cursor holds the whole position and a page only reads, so the
+		 * export goes on where it stopped. If the answer to the last page is lost, the
+		 * object is already marked migrated, so the second request gets
+		 * `MigrationDirtyError` and the caller exports it again from the start.
 		 */
 		async *exportObject(target: { binding: string; id: string; signal?: AbortSignal }): AsyncGenerator<ExportPage> {
 			type Page = { statements: string[]; cursor: string | null };
 			const fetchPage = (cursor: string) => {
 				const params: Record<string, string> = { id: target.id };
 				if (cursor) params.cursor = cursor;
-				const p = call<Page>(target.binding, "export", params, target.signal);
+				const p = withRetries(
+					PAGE_RETRIES,
+					target.signal,
+					() => call<Page>(target.binding, "export", params, target.signal),
+					unanswered,
+				);
 				// Handled when awaited. This only stops an unhandled rejection if the caller stops early.
 				p.catch(() => {});
 				return p;
@@ -231,12 +243,25 @@ async function pool(
 	await Promise.all(Array.from({ length: Math.min(concurrency, count) }, lane));
 }
 
-async function withRetries(retries: number, signal: AbortSignal | undefined, fn: () => Promise<void>): Promise<void> {
+const PAGE_RETRIES = 4;
+
+/** True when the migrator gave no answer: the request failed in the network, or a proxy answered 5xx. */
+function unanswered(err: unknown): boolean {
+	if (err instanceof MigratorError) return err.code === "migrator.not_a_migrator" && (err.status ?? 0) >= 500;
+	return !(err instanceof Error && err.name === "AbortError");
+}
+
+async function withRetries<T>(
+	retries: number,
+	signal: AbortSignal | undefined,
+	fn: () => Promise<T>,
+	retryable: (err: unknown) => boolean = () => true,
+): Promise<T> {
 	for (let attempt = 0; ; attempt++) {
 		try {
 			return await fn();
 		} catch (err) {
-			if (attempt >= retries || signal?.aborted) throw err;
+			if (attempt >= retries || signal?.aborted || !retryable(err)) throw err;
 			await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
 		}
 	}

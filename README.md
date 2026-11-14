@@ -213,7 +213,7 @@ See the [guide](docs/guide.md#limits) for every limit.
 | 🟠 Cloudflare Worker | `migratable(DOClass)` | Wraps your Durable Object class. Adds the export, and blocks requests once it is copied. |
 | 🟠 Cloudflare Worker | `migrationRoute(req, env, { token })` | Handles the migrator's requests (`/__migrate/*`). Returns `null` for everything else, so your app handles it. |
 | 🟢 New Server | `createClient({ workerUrl, token })` | Connects to your Worker |
-| 🟢 New Server | `migrator.exportObject({ binding, id })` | Returns the Durable Object's data as SQL, one page at a time. Throws `MigrationDirtyError` if it was written to during the copy. |
+| 🟢 New Server | `migrator.exportObject({ binding, id })` | Returns the Durable Object's data as SQL, one page at a time. Sends a page request again when the connection drops or a proxy answers 5xx. Throws `MigrationDirtyError` if it was written to during the copy. |
 | 🟢 New Server | `migrator.resolve(binding, { name } \| { id })` | Converts a name to an id, or an id to its name |
 | 🟢 New Server | `migrator.backfill({ cloudflare, startAt, updateStartAt, migrate, concurrency?, retries?, signal? })` | Calls `migrate` for every Durable Object on Cloudflare, 8 at a time. Saves its place so it can resume. Returns `{ done, failed }`. |
 
