@@ -110,6 +110,48 @@ describe("export", () => {
 	});
 });
 
+describe("network", () => {
+	test("a page request that loses its connection, or that a proxy fails, is sent again, and the copy is identical", async () => {
+		await seed(worker, "flaky-network", { big: true });
+		const source = await sourceSnapshot(worker, "flaky-network");
+		// Stands in for the network between the new server and Cloudflare. It drops the second page
+		// request and answers the third with a bare 502, as a proxy in front of the Worker would.
+		let pageRequests = 0;
+		const proxy = createServer(async (req, res) => {
+			const path = req.url ?? "/";
+			if (path.includes("/export")) {
+				pageRequests++;
+				if (pageRequests === 2) return req.socket.destroy();
+				if (pageRequests === 3) return res.writeHead(502).end("bad gateway");
+			}
+			const upstream = await fetch(new URL(path, worker.url), {
+				headers: { authorization: req.headers.authorization ?? "" },
+			});
+			const headers: Record<string, string> = {};
+			// fetch() already decoded the body.
+			upstream.headers.forEach((value, key) => {
+				if (key !== "content-encoding" && key !== "content-length") headers[key] = value;
+			});
+			res.writeHead(upstream.status, headers);
+			res.end(Buffer.from(await upstream.arrayBuffer()));
+		});
+		await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+		const { port } = proxy.address() as AddressInfo;
+		const migrator = createClient({ workerUrl: `http://127.0.0.1:${port}`, token: TOKEN });
+
+		try {
+			const { id } = await migrator.resolve("ROOMS", { name: "flaky-network" });
+			const db = openDestination();
+			for await (const page of migrator.exportObject({ binding: "ROOMS", id })) db.exec(page.sql);
+
+			expect(pageRequests).toBeGreaterThan(3);
+			expect(destinationSnapshot(db)).toEqual(source);
+		} finally {
+			proxy.close();
+		}
+	});
+});
+
 describe("background work", () => {
 	test("a write still pending in ctx.waitUntil makes the export fail, and the retry includes it", async () => {
 		await seed(worker, "late");
